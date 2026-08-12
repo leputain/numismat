@@ -1,0 +1,201 @@
+name: finbot-ops-test
+
+x-ops-test-service: &ops-test-service
+  image: finbot-ops-test:local
+  build:
+    context: .
+    dockerfile: Dockerfile.ops
+  user: "10001:10001"
+  read_only: true
+  tmpfs:
+    - /scratch:size=512m,mode=0700,uid=10001,gid=10001
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  init: true
+  pids_limit: 128
+  environment:
+    FINBOT_OPS_CONTAINER: "1"
+    RESTIC_REPOSITORY_FILE: /run/secrets/restic_repository
+    RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+    RESTIC_CACHE_DIR: /scratch/restic-cache
+  secrets:
+    - restic_repository
+    - restic_password
+  volumes:
+    - ops_test_repository:/repository
+  networks: [ops-test]
+
+x-app-test-service: &app-test-service
+  image: finbot-ops-test-app:local
+  build:
+    context: .
+    dockerfile: Dockerfile
+  user: "10001:10001"
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  init: true
+  pids_limit: 128
+  environment:
+    OWNER_TELEGRAM_USER_ID: "1"
+    TELEGRAM_BOT_TOKEN: synthetic-ops-test-token
+  networks: [ops-test]
+
+services:
+  source-db:
+    image: postgres:18.4-bookworm
+    environment:
+      POSTGRES_DB: finbot_backup_source_test
+      POSTGRES_USER: finbot_test
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    tmpfs:
+      - /var/lib/postgresql:size=512m,mode=0700,uid=999,gid=999
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U finbot_test -d finbot_backup_source_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [ops-test]
+
+  source-migrate:
+    <<: *app-test-service
+    command: [alembic, upgrade, head]
+    secrets:
+      - source: source_database_url
+        target: database_url
+
+  seed:
+    <<: *ops-test-service
+    command: [finbot-seed-ops-test]
+    environment:
+      FINBOT_OPS_CONTAINER: "1"
+      PGHOST: source-db
+      PGPORT: "5432"
+      PGDATABASE: finbot_backup_source_test
+      PGUSER: finbot_test
+      PGPASS_SECRET_FILE: /run/secrets/source_pgpass
+    secrets:
+      - source_pgpass
+
+  restic-init:
+    <<: *ops-test-service
+    command: [finbot-init-restic]
+
+  backup:
+    <<: *ops-test-service
+    command: [finbot-backup]
+    environment:
+      FINBOT_OPS_CONTAINER: "1"
+      PGHOST: source-db
+      PGPORT: "5432"
+      PGDATABASE: finbot_backup_source_test
+      PGUSER: finbot_test
+      PGPASS_SECRET_FILE: /run/secrets/source_pgpass
+      RESTIC_REPOSITORY_FILE: /run/secrets/restic_repository
+      RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+      RESTIC_CACHE_DIR: /scratch/restic-cache
+    secrets:
+      - restic_repository
+      - restic_password
+      - source_pgpass
+
+  backup-age:
+    <<: *ops-test-service
+    command: [finbot-check-backup-age]
+    environment:
+      FINBOT_OPS_CONTAINER: "1"
+      MAX_BACKUP_AGE_HOURS: "30"
+      RESTIC_REPOSITORY_FILE: /run/secrets/restic_repository
+      RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+      RESTIC_CACHE_DIR: /scratch/restic-cache
+
+  restic-check:
+    <<: *ops-test-service
+    command: [restic, check]
+
+  restore-db:
+    image: postgres:18.4-bookworm
+    environment:
+      POSTGRES_DB: finbot_restore_test
+      POSTGRES_USER: finbot_test
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    tmpfs:
+      - /var/lib/postgresql:size=512m,mode=0700,uid=999,gid=999
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U finbot_test -d finbot_restore_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [ops-test]
+
+  restore:
+    <<: *ops-test-service
+    command: [finbot-restore-drill]
+    environment:
+      FINBOT_OPS_CONTAINER: "1"
+      PGHOST: restore-db
+      PGPORT: "5432"
+      PGDATABASE: finbot_restore_test
+      PGUSER: finbot_test
+      PGPASS_SECRET_FILE: /run/secrets/restore_pgpass
+      RESTIC_REPOSITORY_FILE: /run/secrets/restic_repository
+      RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+      RESTIC_CACHE_DIR: /scratch/restic-cache
+    secrets:
+      - restic_repository
+      - restic_password
+      - restore_pgpass
+
+  restore-migrate:
+    <<: *app-test-service
+    command: [alembic, upgrade, head]
+    secrets:
+      - source: restore_database_url
+        target: database_url
+
+  restore-health:
+    <<: *app-test-service
+    command: [python, -m, finbot.healthcheck]
+    secrets:
+      - source: restore_database_url
+        target: database_url
+
+  verify:
+    <<: *ops-test-service
+    command: [finbot-verify-ops-test]
+    environment:
+      FINBOT_OPS_CONTAINER: "1"
+      PGHOST: restore-db
+      PGPORT: "5432"
+      PGDATABASE: finbot_restore_test
+      PGUSER: finbot_test
+      PGPASS_SECRET_FILE: /run/secrets/restore_pgpass
+    secrets:
+      - restore_pgpass
+
+networks:
+  ops-test:
+    internal: true
+
+volumes:
+  ops_test_repository:
+
+secrets:
+  postgres_password:
+    file: ${OPS_TEST_POSTGRES_PASSWORD_FILE:-/dev/null}
+  source_pgpass:
+    file: ${OPS_TEST_SOURCE_PGPASS_FILE:-/dev/null}
+  restore_pgpass:
+    file: ${OPS_TEST_RESTORE_PGPASS_FILE:-/dev/null}
+  source_database_url:
+    file: ${OPS_TEST_SOURCE_DATABASE_URL_FILE:-/dev/null}
+  restore_database_url:
+    file: ${OPS_TEST_RESTORE_DATABASE_URL_FILE:-/dev/null}
+  restic_repository:
+    file: ${OPS_TEST_RESTIC_REPOSITORY_FILE:-/dev/null}
+  restic_password:
+    file: ${OPS_TEST_RESTIC_PASSWORD_FILE:-/dev/null}

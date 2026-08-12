@@ -1,0 +1,152 @@
+name: finbot-ops
+
+x-ops-service: &ops-service
+  image: ${FINBOT_OPS_IMAGE:-finbot-ops:local}
+  build:
+    context: .
+    dockerfile: Dockerfile.ops
+  user: "10001:10001"
+  read_only: true
+  tmpfs:
+    - /scratch:size=512m,mode=0700,uid=10001,gid=10001
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  init: true
+  pids_limit: 128
+  environment:
+    FINBOT_OPS_CONTAINER: "1"
+    RESTIC_REPOSITORY_FILE: /run/secrets/restic_repository
+    RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+    RESTIC_CACHE_DIR: /scratch/restic-cache
+  secrets:
+    - restic_repository
+    - restic_password
+  volumes:
+    - restic_repository_data:/repository
+
+x-restore-app: &restore-app
+  image: ${FINBOT_RESTORE_APP_IMAGE:-finbot:restore-drill}
+  build:
+    context: .
+    dockerfile: Dockerfile
+  user: "10001:10001"
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  init: true
+  pids_limit: 128
+  environment:
+    OWNER_TELEGRAM_USER_ID: "1"
+    TELEGRAM_BOT_TOKEN: synthetic-restore-drill-token
+  secrets:
+    - source: restore_database_url
+      target: database_url
+  networks: [restore]
+
+services:
+  restic-init:
+    <<: *ops-service
+    command: [finbot-init-restic]
+
+  backup:
+    <<: *ops-service
+    command: [finbot-backup]
+    environment:
+      FINBOT_OPS_CONTAINER: "1"
+      PGHOST: ${FINBOT_BACKUP_PGHOST:-db}
+      PGPORT: ${FINBOT_BACKUP_PGPORT:-5432}
+      PGDATABASE: ${FINBOT_BACKUP_PGDATABASE:-finbot}
+      PGUSER: ${FINBOT_BACKUP_PGUSER:-finbot_migrations}
+      PGPASS_SECRET_FILE: /run/secrets/backup_pgpass
+      RESTIC_REPOSITORY_FILE: /run/secrets/restic_repository
+      RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+      RESTIC_CACHE_DIR: /scratch/restic-cache
+    secrets:
+      - restic_repository
+      - restic_password
+      - backup_pgpass
+    networks: [production]
+
+  backup-age:
+    <<: *ops-service
+    command: [finbot-check-backup-age]
+    environment:
+      FINBOT_OPS_CONTAINER: "1"
+      MAX_BACKUP_AGE_HOURS: ${MAX_BACKUP_AGE_HOURS:-30}
+      RESTIC_REPOSITORY_FILE: /run/secrets/restic_repository
+      RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+      RESTIC_CACHE_DIR: /scratch/restic-cache
+
+  restic-check:
+    <<: *ops-service
+    command: [restic, check]
+
+  restore-db:
+    image: postgres:18.4-bookworm
+    environment:
+      POSTGRES_DB: finbot_restore_test
+      POSTGRES_USER: finbot_restore
+      POSTGRES_PASSWORD_FILE: /run/secrets/restore_postgres_password
+    secrets: [restore_postgres_password]
+    tmpfs:
+      - /var/lib/postgresql:size=512m,mode=0700,uid=999,gid=999
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U finbot_restore -d finbot_restore_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [restore]
+
+  restore:
+    <<: *ops-service
+    command: [finbot-restore-drill]
+    environment:
+      FINBOT_OPS_CONTAINER: "1"
+      PGHOST: restore-db
+      PGPORT: "5432"
+      PGDATABASE: finbot_restore_test
+      PGUSER: finbot_restore
+      PGPASS_SECRET_FILE: /run/secrets/restore_pgpass
+      RESTIC_REPOSITORY_FILE: /run/secrets/restic_repository
+      RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+      RESTIC_CACHE_DIR: /scratch/restic-cache
+    secrets:
+      - restic_repository
+      - restic_password
+      - restore_pgpass
+    networks: [restore]
+
+  restore-migrate:
+    <<: *restore-app
+    command: [alembic, upgrade, head]
+
+  restore-health:
+    <<: *restore-app
+    command: [python, -m, finbot.healthcheck]
+
+networks:
+  production:
+    name: ${FINBOT_PRODUCTION_NETWORK:-finbot_default}
+    external: true
+  restore:
+    internal: true
+
+volumes:
+  restic_repository_data:
+    name: ${FINBOT_RESTIC_VOLUME:-finbot_restic_repository}
+
+secrets:
+  backup_pgpass:
+    file: ${FINBOT_BACKUP_PGPASS_FILE:-./secrets/backup_pgpass}
+  restic_repository:
+    file: ${FINBOT_RESTIC_REPOSITORY_FILE:-./secrets/restic_repository}
+  restic_password:
+    file: ${FINBOT_RESTIC_PASSWORD_FILE:-./secrets/restic_password}
+  restore_postgres_password:
+    file: ${FINBOT_RESTORE_POSTGRES_PASSWORD_FILE:-./secrets/restore_postgres_password}
+  restore_pgpass:
+    file: ${FINBOT_RESTORE_PGPASS_FILE:-./secrets/restore_pgpass}
+  restore_database_url:
+    file: ${FINBOT_RESTORE_DATABASE_URL_FILE:-./secrets/restore_database_url}

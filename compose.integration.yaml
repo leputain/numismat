@@ -1,0 +1,48 @@
+name: finbot-integration
+
+x-test-service: &test-service
+  image: finbot-integration:local
+  build:
+    context: .
+    dockerfile: Dockerfile.test
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+    - /app/.pytest_cache:size=16m,mode=0700,uid=10001,gid=10001
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  init: true
+  pids_limit: 128
+  environment:
+    DATABASE_URL: postgresql+psycopg://finbot_test:synthetic-test-only@db:5432/finbot_test
+    TEST_DATABASE_URL: postgresql+psycopg://finbot_test:synthetic-test-only@db:5432/finbot_test
+
+services:
+  db:
+    image: postgres:18.4-bookworm
+    environment:
+      POSTGRES_DB: finbot_test
+      POSTGRES_USER: finbot_test
+      POSTGRES_PASSWORD: synthetic-test-only
+    tmpfs:
+      - /var/lib/postgresql:size=512m,mode=0700,uid=999,gid=999
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U finbot_test -d finbot_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [integration]
+
+  migrate:
+    <<: *test-service
+    command: [alembic, upgrade, head]
+    networks: [integration]
+
+  tests:
+    <<: *test-service
+    command: [run-integration-tests]
+    networks: [integration]
+
+networks:
+  integration:
+    internal: true

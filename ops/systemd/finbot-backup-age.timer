@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Finbot backup freshness every six hours
+
+[Timer]
+OnCalendar=0/6:15:00 UTC
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target
