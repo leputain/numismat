@@ -1,4 +1,8 @@
 FROM python:3.14.7-slim-bookworm
+ARG APP_VERSION="0.45.0"
+LABEL org.opencontainers.image.title="Numismat" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.source="https://github.com/leputain/numismat"
 COPY --from=ghcr.io/astral-sh/uv:0.12.2 /uv /uvx /bin/
 WORKDIR /app
 RUN apt-get update \

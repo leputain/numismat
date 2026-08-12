@@ -3,6 +3,7 @@ from html import escape
 from math import ceil
 from zoneinfo import ZoneInfo
 
+from finbot import VERSION_LABEL
 from finbot.application.queries.reports import CategoryTotal, ReportTransaction
 from finbot.application.queries.transactions import TransactionDetails
 
@@ -165,7 +166,7 @@ def report_text(
     return "\n".join(lines)
 
 
-HELP_TEXT = """<b>Как пользоваться Finbot</b>
+HELP_TEXT = f"""<b>Как пользоваться Numismat · {VERSION_LABEL}</b>
 
 <b>Самый быстрый способ</b>
 Просто отправьте покупку одним сообщением:

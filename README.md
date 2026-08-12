@@ -7,6 +7,7 @@
   <p>Быстрый ввод, отчёты, безопасные черновики и локальный OCR чеков — без отправки финансовых данных в AI-сервисы.</p>
 
   <p>
+    <a href="https://github.com/leputain/numismat/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/leputain/numismat?color=CB7B42"></a>
     <a href="https://www.python.org/downloads/release/python-3140/"><img alt="Python 3.14" src="https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white"></a>
     <a href="https://docs.aiogram.dev/"><img alt="aiogram 3" src="https://img.shields.io/badge/aiogram-3-2CA5E0?logo=telegram&logoColor=white"></a>
     <a href="https://www.postgresql.org/"><img alt="PostgreSQL 18" src="https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white"></a>
@@ -259,6 +260,7 @@ make restore-drill   # isolated finbot_restore_test + Alembic + healthcheck
 - [DECISIONS.md](DECISIONS.md) — архитектурные решения;
 - [PLAN.md](PLAN.md) — фактическое состояние и дальнейшие шаги;
 - [AGENTS.md](AGENTS.md) — инженерные ограничения проекта.
+- [CHANGELOG.md](CHANGELOG.md) — история публичных версий.
 
 ## Ограничения
 

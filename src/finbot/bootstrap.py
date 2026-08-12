@@ -20,6 +20,7 @@ from aiogram.types import (
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from finbot import VERSION_LABEL
 from finbot.adapters.database.category_rules import SqlAlchemyCategoryRuleRepository
 from finbot.adapters.database.models import Account, Category, Draft, User
 from finbot.adapters.database.queries.reports import (
@@ -1072,7 +1073,7 @@ def build_dispatcher(
             suspended_draft = await _suspend_for_navigation(session, user)
             await session.commit()
         await message.answer(
-            "<b>Finbot готов</b> 👋\n\n"
+            f"<b>Numismat {VERSION_LABEL} готов</b> 👋\n\n"
             "Отправьте <code>1450 ресторан</code> или нажмите «➕ Добавить операцию».\n"
             "Все данные доступны только вам в этом личном чате.",
             parse_mode="HTML",
