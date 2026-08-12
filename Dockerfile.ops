@@ -1,0 +1,25 @@
+FROM restic/restic:0.18.1 AS restic
+
+FROM postgres:18.4-bookworm
+
+COPY --from=restic /usr/bin/restic /usr/local/bin/restic
+
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin finbot-ops \
+    && install -d -o 10001 -g 10001 -m 0700 /repository /scratch
+
+COPY --chmod=0555 scripts/backup.sh /usr/local/bin/finbot-backup
+COPY --chmod=0555 scripts/check-backup-age.sh /usr/local/bin/finbot-check-backup-age
+COPY --chmod=0555 scripts/restore-drill.sh /usr/local/bin/finbot-restore-drill
+COPY --chmod=0555 scripts/init-restic.sh /usr/local/bin/finbot-init-restic
+COPY --chmod=0555 scripts/seed-ops-test.sh /usr/local/bin/finbot-seed-ops-test
+COPY --chmod=0555 scripts/verify-ops-test.sh /usr/local/bin/finbot-verify-ops-test
+
+USER 10001:10001
+WORKDIR /scratch
+
+ENV FINBOT_OPS_CONTAINER=1 \
+    RESTIC_CACHE_DIR=/scratch/restic-cache \
+    TMPDIR=/scratch
+
+ENTRYPOINT []
+CMD ["finbot-check-backup-age"]

@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly Finbot backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+Persistent=true
+RandomizedDelaySec=20m
+
+[Install]
+WantedBy=timers.target

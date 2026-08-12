@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly Finbot restic repository check
+
+[Timer]
+OnCalendar=Sun 04:00:00 UTC
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target

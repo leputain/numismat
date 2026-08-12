@@ -1,0 +1,46 @@
+services:
+  db:
+    image: postgres:18.4-bookworm
+    ports: ["127.0.0.1:55432:5432"]
+    environment:
+      POSTGRES_DB: finbot
+      POSTGRES_USER: finbot
+      POSTGRES_PASSWORD: finbot-dev-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finbot -d finbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes: ["db_data:/var/lib/postgresql"]
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://finbot:finbot-dev-only@db:5432/finbot}
+    depends_on: {db: {condition: service_healthy}}
+  bot:
+    build: .
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      OWNER_TELEGRAM_USER_ID: ${OWNER_TELEGRAM_USER_ID:-0}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://finbot:finbot-dev-only@db:5432/finbot}
+      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-ru_RU}
+      DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Europe/Moscow}
+      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-RUB}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on: {migrate: {condition: service_completed_successfully}}
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    pids_limit: 100
+    logging: {driver: local}
+    healthcheck:
+      test: ["CMD", "python", "-m", "finbot.healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+volumes:
+  db_data:

@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly isolated Finbot restore drill
+
+[Timer]
+OnCalendar=Sun 05:00:00 UTC
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target

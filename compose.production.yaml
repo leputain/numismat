@@ -1,0 +1,60 @@
+services:
+  db:
+    image: postgres:18.4-bookworm
+    expose: ["5432"]
+    environment:
+      POSTGRES_DB: finbot
+      POSTGRES_USER: finbot_migrations
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - db_data:/var/lib/postgresql
+      - ./deploy/postgres/001-runtime-boundary.sql:/docker-entrypoint-initdb.d/001-runtime-boundary.sql:ro
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U finbot_migrations -d finbot"], interval: 5s, timeout: 5s, retries: 10}
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    depends_on: {db: {condition: service_healthy}}
+    secrets:
+      - source: database_url_migrations
+        target: database_url
+  provision-runtime:
+    build: .
+    command: ["python", "-m", "finbot.adapters.database.provision"]
+    depends_on: {migrate: {condition: service_completed_successfully}}
+    secrets:
+      - database_url_migrations
+      - database_url_runtime
+  bot:
+    build: .
+    user: "10001:10001"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    pids_limit: 100
+    environment:
+      OWNER_TELEGRAM_USER_ID: ${OWNER_TELEGRAM_USER_ID:-0}
+      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-ru_RU}
+      DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Europe/Moscow}
+      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-RUB}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on: {provision-runtime: {condition: service_completed_successfully}}
+    secrets:
+      - telegram_bot_token
+      - source: database_url_runtime
+        target: database_url
+    logging: {driver: local, options: {max-size: "10m", max-file: "5"}}
+    healthcheck:
+      test: ["CMD", "python", "-m", "finbot.healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+volumes: {db_data: {}}
+secrets:
+  telegram_bot_token: {file: ./secrets/telegram_bot_token}
+  database_url_runtime: {file: ./secrets/database_url_runtime}
+  database_url_migrations: {file: ./secrets/database_url_migrations}
+  postgres_password: {file: ./secrets/postgres_password}
