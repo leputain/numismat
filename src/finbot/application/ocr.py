@@ -11,6 +11,8 @@ from finbot.domain.transactions import TransactionDraft, TransactionType
 
 MAX_OCR_TEXT_LENGTH = 32_768
 MAX_OCR_TRANSACTIONS = 20
+MAX_OCR_IMAGE_BYTES = 10 * 1024 * 1024
+SUPPORTED_OCR_IMAGE_MIME_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 
 
 class OcrImportError(FinbotError):

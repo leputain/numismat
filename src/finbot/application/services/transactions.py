@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -10,13 +10,13 @@ from finbot.domain.transactions import TransactionDraft, TransactionView
 class TransactionPatch:
     """Persistence-neutral optimistic update request."""
 
-    transaction_id: UUID
-    version: int
-    amount_minor: int | None = None
-    category_id: UUID | None = None
-    account_id: UUID | None = None
-    occurred_at: datetime | None = None
-    description: str | None = None
+    transaction_id: UUID = field(repr=False)
+    version: int = field(repr=False)
+    amount_minor: int | None = field(default=None, repr=False)
+    category_id: UUID | None = field(default=None, repr=False)
+    account_id: UUID | None = field(default=None, repr=False)
+    occurred_at: datetime | None = field(default=None, repr=False)
+    description: str | None = field(default=None, repr=False)
 
 
 class TransactionCommands(Protocol):

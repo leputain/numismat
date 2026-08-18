@@ -19,11 +19,26 @@ correlation_id: contextvars.ContextVar[str] = contextvars.ContextVar(
 SAFE_EVENT_CODES = frozenset(
     {
         "log_event_rejected",
+        "local_ai_suggestion_completed",
+        "mcp_tool_completed",
+        "http_request_completed",
+        "http_auth_login_completed",
+        "http_auth_logout_completed",
+        "http_auth_session_checked",
+        "http_security_cleanup_completed",
+        "miniapp_menu_configuration_completed",
         "polling_fetch_failed",
         "polling_fetch_recovered",
         "polling_started",
         "polling_stopped",
         "polling_update_failed",
+        "recurring_materialization_completed",
+        "recurring_materialization_started",
+        "recurring_runner_started",
+        "recurring_runner_stopped",
+        "recurring_runner_tick_completed",
+        "recurring_staging_completed",
+        "recurring_staging_started",
         "update_authorized",
         "update_failed",
         "update_handled",
@@ -33,6 +48,56 @@ SAFE_EVENT_CODES = frozenset(
 )
 
 _SAFE_RESULTS = frozenset({"error", "ignored", "rejected", "retry", "stopped", "success"})
+_SAFE_AI_PROVIDERS = frozenset({"disabled", "ollama"})
+_SAFE_AI_STAGES = frozenset({"configuration", "request", "response", "validation"})
+_SAFE_HTTP_ERROR_CODES = frozenset(
+    {
+        "active_draft_conflict",
+        "catalog_unavailable",
+        "draft_revision_conflict",
+        "duplicate_operation",
+        "forbidden",
+        "internal_error",
+        "invalid_cursor",
+        "invalid_state",
+        "method_not_allowed",
+        "not_found",
+        "object_version_conflict",
+        "ocr_processing_failed",
+        "ocr_queue_invalid",
+        "readiness_failed",
+        "review_required",
+        "unauthorized",
+        "validation_failed",
+        "auth_session_invalid",
+        "csrf_failed",
+        "origin_forbidden",
+        "request_too_large",
+        "telegram_auth_expired",
+        "telegram_auth_invalid",
+        "telegram_auth_replayed",
+        "telegram_owner_forbidden",
+        "unsupported_media_type",
+    }
+)
+_SAFE_AUTH_REASONS = frozenset(
+    {
+        "csrf_failed",
+        "expired",
+        "foreign_owner",
+        "future",
+        "internal_error",
+        "invalid_request",
+        "invalid_session",
+        "invalid_signature",
+        "malformed",
+        "origin_forbidden",
+        "owner_unavailable",
+        "replayed",
+        "success",
+        "unsupported_media_type",
+    }
+)
 _SAFE_EVENT_TYPES = {
     "CallbackQuery": "callback_query",
     "ChatJoinRequest": "chat_join_request",
@@ -80,7 +145,10 @@ _SAFE_ERROR_CLASS_NAMES = frozenset(
     }
 )
 _COMPONENT_PREFIXES = (
+    ("finbot.ai", "ai"),
+    ("finbot.mcp", "mcp"),
     ("finbot.auth", "auth"),
+    ("finbot.http", "http"),
     ("finbot.lifecycle", "lifecycle"),
     ("finbot.polling", "polling"),
     ("finbot.application", "application"),
@@ -92,6 +160,7 @@ _COMPONENT_PREFIXES = (
     ("finbot", "application"),
 )
 _CORRELATION_ID = re.compile(r"[0-9a-f]{12}\Z")
+_HTTP_ROUTE_TEMPLATE = re.compile(r"/[A-Za-z0-9_{}:./~-]{0,127}\Z")
 _BOT_TOKEN = re.compile(r"(?i)(?:https?://api\.telegram\.org/)?bot\d+:[A-Za-z0-9_-]+")
 _DATABASE_PASSWORD = re.compile(r"(postgresql(?:\+\w+)?://[^:\s/]+:)[^@\s]+(@)")
 _LONG_NUMBER = re.compile(r"(?<![\w.])\d{6,}(?![\w.])")
@@ -197,7 +266,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         try:
-            payload: dict[str, str] = {
+            payload: dict[str, str | int] = {
                 "component": _component(record.name),
                 "correlation_id": _safe_correlation_id(),
                 "event": _event_code(record),
@@ -215,6 +284,34 @@ class JsonFormatter(logging.Formatter):
             duration_bucket = _duration_bucket(getattr(record, "duration_ms", None))
             if duration_bucket is not None:
                 payload["duration"] = duration_bucket
+
+            route_template = getattr(record, "route_template", None)
+            if (
+                type(route_template) is str
+                and len(route_template) <= 128
+                and _HTTP_ROUTE_TEMPLATE.fullmatch(route_template)
+            ):
+                payload["route_template"] = route_template
+
+            status_code = getattr(record, "status_code", None)
+            if type(status_code) is int and 100 <= status_code <= 599:
+                payload["status_code"] = status_code
+
+            error_code = getattr(record, "error_code", None)
+            if type(error_code) is str and error_code in _SAFE_HTTP_ERROR_CODES:
+                payload["error_code"] = error_code
+
+            auth_reason = getattr(record, "auth_reason", None)
+            if type(auth_reason) is str and auth_reason in _SAFE_AUTH_REASONS:
+                payload["auth_reason"] = auth_reason
+
+            provider = getattr(record, "provider", None)
+            if type(provider) is str and provider in _SAFE_AI_PROVIDERS:
+                payload["provider"] = provider
+
+            stage = getattr(record, "stage", None)
+            if type(stage) is str and stage in _SAFE_AI_STAGES:
+                payload["stage"] = stage
 
             error_class = _record_error_class(record.exc_info)
             if error_class is not None:
@@ -244,3 +341,7 @@ def configure(level: str = "INFO") -> None:
     # Aiogram's normal lifecycle logs contain bot/update IDs.  Warnings and errors still
     # reach the root handler, where their message and arguments are discarded.
     logging.getLogger("aiogram").setLevel(logging.WARNING)
+    # HTTP clients and ASGI servers normally log raw URLs, client addresses, and request
+    # lines.  Numismat emits its own route-template-only completion event instead.
+    for logger_name in ("httpcore2", "httpx2", "uvicorn.access"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)

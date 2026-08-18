@@ -1,5 +1,5 @@
 import os
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -9,7 +9,7 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.base import BaseSession
 from aiogram.methods import TelegramMethod
-from aiogram.types import Message, Update
+from aiogram.types import CallbackQuery, Message, Update
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
@@ -40,6 +40,8 @@ class FakeTelegramSession(BaseSession):
         super().__init__()
         self.last_message_id = 2000
         self.last_text = ""
+        self.last_callback_text: str | None = None
+        self.last_callback_show_alert = False
 
     async def close(self) -> None:
         return None
@@ -52,6 +54,10 @@ class FakeTelegramSession(BaseSession):
     ) -> Any:
         del timeout
         method_name = type(method).__name__
+        if method_name == "AnswerCallbackQuery":
+            self.last_callback_text = cast(Any, method).text
+            self.last_callback_show_alert = bool(cast(Any, method).show_alert)
+            return True
         if method_name in {"SendMessage", "EditMessageText", "SendDocument"}:
             self.last_text = str(getattr(method, "text", ""))
             if method_name != "EditMessageText":
@@ -191,6 +197,29 @@ class TelegramHarness:
             ),
         )
 
+    async def callback_untracked(self, data: str, message_id: int | None = None) -> int:
+        update_id = self._next_update_id()
+        update = Update.model_validate(
+            _callback_update(
+                update_id,
+                message_id if message_id is not None else self.telegram.last_message_id,
+                data,
+            ),
+            context={"bot": self.bot},
+        )
+        callback = update.callback_query
+        assert callback is not None
+        handler = cast(
+            Callable[[CallbackQuery, int | None], Awaitable[None]],
+            next(
+                item.callback
+                for item in self.dispatcher.callback_query.handlers
+                if item.callback.__name__ == "versioned_draft"
+            ),
+        )
+        await handler(callback, None)
+        return update_id
+
     async def draft(self) -> tuple[UUID, str, dict[str, object], int, bool]:
         async with self.factory() as session:
             row = (
@@ -205,6 +234,22 @@ class TelegramHarness:
             ).one()
         return row.id, row.state, row.payload, row.revision, row.suspended
 
+    async def draft_presentation_message_id(self) -> int:
+        async with self.factory() as session:
+            message_id = await session.scalar(
+                text(
+                    "SELECT presentation.message_id "
+                    "FROM telegram_draft_presentations AS presentation "
+                    "JOIN drafts ON drafts.id = presentation.draft_id "
+                    "JOIN users ON users.id = drafts.user_id "
+                    "WHERE users.telegram_user_id = :telegram_id "
+                    "AND presentation.rendered_revision = drafts.revision"
+                ),
+                {"telegram_id": OWNER_ID},
+            )
+        assert message_id is not None
+        return int(message_id)
+
     async def draft_callback(
         self,
         action: DraftAction,
@@ -214,17 +259,14 @@ class TelegramHarness:
         object_version: int | None = None,
     ) -> str:
         draft_id, _, _, revision, _ = await self.draft()
-        return cast(
-            str,
-            DraftInteraction(
-                action=action,
-                draft_id=draft_id,
-                revision=revision,
-                page=page,
-                object_id=object_id,
-                object_version=object_version,
-            ).encode(),
-        )
+        return DraftInteraction(
+            action=action,
+            draft_id=draft_id,
+            revision=revision,
+            page=page,
+            object_id=object_id,
+            object_version=object_version,
+        ).encode()
 
 
 @pytest.fixture
@@ -257,7 +299,8 @@ async def test_legacy_and_stale_draft_callbacks_cannot_mutate_and_resume_is_vers
     harness = telegram_harness
     await harness.message("/wizard")
     initial = await harness.draft()
-    wizard_message_id = int(str(initial[2]["ui_message_id"]))
+    assert "ui_message_id" not in initial[2]
+    wizard_message_id = await harness.draft_presentation_message_id()
 
     await harness.callback("w:type:expense", wizard_message_id)
     assert await harness.draft() == initial
@@ -302,7 +345,7 @@ async def test_legacy_and_stale_draft_callbacks_cannot_mutate_and_resume_is_vers
 
     await harness.callback(
         await harness.draft_callback(DraftAction.SELECT_TYPE, page=0),
-        int(str(resumed[2]["ui_message_id"])),
+        await harness.draft_presentation_message_id(),
     )
     continued = await harness.draft()
     assert continued[0] == resumed[0]
@@ -334,12 +377,12 @@ async def test_legacy_and_stale_draft_callbacks_cannot_mutate_and_resume_is_vers
 async def _save_quick_transaction(harness: TelegramHarness, value: str) -> tuple[UUID, int, int]:
     await harness.message(value)
     _, state, payload, _, _ = await harness.draft()
-    assert state == "quick_confirm"
+    assert state == "review"
     assert payload["flow"] == "quick"
     before = await _active_transaction_count(harness.factory)
     await harness.callback(
         await harness.draft_callback(DraftAction.CONFIRM),
-        int(str(payload.get("ui_message_id", harness.telegram.last_message_id))),
+        await harness.draft_presentation_message_id(),
     )
     async with harness.factory() as session:
         row = (
@@ -374,6 +417,139 @@ async def _active_transaction_count(factory: async_sessionmaker[Any]) -> int:
         )
 
 
+async def _outbox_receipt(
+    factory: async_sessionmaker[Any],
+    update_id: int,
+) -> tuple[str, dict[str, Any]]:
+    async with factory() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT method, text, reply_markup FROM telegram_response_outbox "
+                    "WHERE update_id = :update_id"
+                ),
+                {"update_id": update_id},
+            )
+        ).one()
+    assert row.method == "edit_message_text"
+    assert isinstance(row.reply_markup, dict)
+    return str(row.text), cast(dict[str, Any], row.reply_markup)
+
+
+def _callback_data(markup: dict[str, Any]) -> set[str]:
+    return {
+        str(button["callback_data"])
+        for row in markup["inline_keyboard"]
+        for button in row
+        if "callback_data" in button
+    }
+
+
+@pytest.mark.asyncio
+async def test_versioned_draft_discard_is_stale_safe_replay_safe_and_untracked_safe(
+    telegram_harness: TelegramHarness,
+) -> None:
+    harness = telegram_harness
+    await harness.message("/wizard")
+    initial = await harness.draft()
+    stale_data = DraftInteraction(
+        action=DraftAction.DISCARD,
+        draft_id=initial[0],
+        revision=initial[3],
+    ).encode()
+
+    await harness.message("/settings")
+    settings_message_id = harness.telegram.last_message_id
+    suspended = await harness.draft()
+    assert suspended[0] == initial[0]
+    assert suspended[3] == initial[3] + 1
+    assert suspended[4] is True
+
+    stale_update_id = UPDATE_BASE + harness.offset + 1
+    await harness.callback(stale_data, settings_message_id)
+    assert await harness.draft() == suspended
+    assert harness.telegram.last_callback_text == (
+        "Форма уже изменилась. Откройте актуальный черновик"
+    )
+    assert harness.telegram.last_callback_show_alert is True
+    async with harness.factory() as session:
+        stale_claimed = await session.scalar(
+            text("SELECT count(*) FROM processed_updates WHERE update_id = :update_id"),
+            {"update_id": stale_update_id},
+        )
+        stale_receipts = await session.scalar(
+            text("SELECT count(*) FROM telegram_response_outbox WHERE update_id = :update_id"),
+            {"update_id": stale_update_id},
+        )
+    assert stale_claimed == 0
+    assert stale_receipts == 0
+
+    current_data = await harness.draft_callback(DraftAction.DISCARD)
+    current_update_id = UPDATE_BASE + harness.offset + 1
+    await harness.callback(current_data, settings_message_id)
+    assert harness.telegram.last_callback_text == "Незавершённый ввод сброшен"
+    assert harness.telegram.last_callback_show_alert is False
+    async with harness.factory() as session:
+        assert (
+            await session.scalar(
+                text(
+                    "SELECT count(*) FROM drafts JOIN users ON users.id = drafts.user_id "
+                    "WHERE users.telegram_user_id = :telegram_id"
+                ),
+                {"telegram_id": OWNER_ID},
+            )
+            == 0
+        )
+    receipt_text, receipt_markup = await _outbox_receipt(
+        harness.factory,
+        current_update_id,
+    )
+    assert receipt_text.startswith("<b>Настройки</b>")
+    assert not any(value.startswith("d") for value in _callback_data(receipt_markup))
+
+    harness.telegram.last_callback_text = None
+    await harness.dispatcher.feed_update(
+        harness.bot,
+        Update.model_validate(
+            _callback_update(current_update_id, settings_message_id, current_data),
+            context={"bot": harness.bot},
+        ),
+    )
+    assert harness.telegram.last_callback_text == "Уже обработано"
+
+    await harness.message("/wizard")
+    _, _, payload, _, _ = await harness.draft()
+    untracked_data = await harness.draft_callback(DraftAction.DISCARD)
+    async with harness.factory() as session:
+        outbox_before = int(
+            await session.scalar(text("SELECT count(*) FROM telegram_response_outbox")) or 0
+        )
+    untracked_update_id = await harness.callback_untracked(
+        untracked_data,
+        await harness.draft_presentation_message_id(),
+    )
+    assert harness.telegram.last_callback_text == "Незавершённый ввод сброшен"
+    assert harness.telegram.last_text.startswith("<b>Настройки</b>")
+    async with harness.factory() as session:
+        remaining_drafts = await session.scalar(
+            text(
+                "SELECT count(*) FROM drafts JOIN users ON users.id = drafts.user_id "
+                "WHERE users.telegram_user_id = :telegram_id"
+            ),
+            {"telegram_id": OWNER_ID},
+        )
+        outbox_after = int(
+            await session.scalar(text("SELECT count(*) FROM telegram_response_outbox")) or 0
+        )
+        untracked_claimed = await session.scalar(
+            text("SELECT count(*) FROM processed_updates WHERE update_id = :update_id"),
+            {"update_id": untracked_update_id},
+        )
+    assert remaining_drafts == 0
+    assert outbox_after == outbox_before
+    assert untracked_claimed == 0
+
+
 @pytest.mark.asyncio
 async def test_replayed_confirm_delivers_committed_outbox_without_duplicate_mutation(
     telegram_harness: TelegramHarness,
@@ -381,9 +557,11 @@ async def test_replayed_confirm_delivers_committed_outbox_without_duplicate_muta
     harness = telegram_harness
     await harness.message("777 ресторан")
     _, state, payload, _, _ = await harness.draft()
-    assert state == "quick_confirm"
+    assert state == "review"
+    assert "amount" not in payload
+    assert "ui_message_id" not in payload
     callback_data = await harness.draft_callback(DraftAction.CONFIRM)
-    message_id = int(str(payload.get("ui_message_id", harness.telegram.last_message_id)))
+    message_id = await harness.draft_presentation_message_id()
     update_id = harness._next_update_id()
 
     # Model the exact crash point: the handler's claim, financial mutation and
@@ -397,7 +575,7 @@ async def test_replayed_confirm_delivers_committed_outbox_without_duplicate_muta
         transaction = Transaction(
             user_id=user.id,
             type=str(draft.payload["type"]),
-            amount_minor=int(str(draft.payload["amount"])),
+            amount_minor=int(str(draft.payload["amount_minor"])),
             currency=user.base_currency,
             account_id=UUID(str(draft.payload["account_id"])),
             category_id=UUID(str(draft.payload["category_id"])),
@@ -581,7 +759,8 @@ async def test_transaction_edit_callbacks_reject_legacy_stale_wrong_message_and_
     )
     edit_draft = await harness.draft()
     assert edit_draft[1] == "edit_menu"
-    edit_message_id = int(str(edit_draft[2]["ui_message_id"]))
+    assert "ui_message_id" not in edit_draft[2]
+    edit_message_id = await harness.draft_presentation_message_id()
     edit_category = await harness.draft_callback(DraftAction.TX_EDIT_CATEGORY)
 
     await harness.callback(
@@ -672,14 +851,16 @@ async def test_repeat_today_opens_review_and_persists_only_after_confirmation(
     )
     assert await _active_transaction_count(harness.factory) == 1
     _, state, payload, _, _ = await harness.draft()
-    assert state == "quick_confirm"
+    assert state == "review"
     assert payload["flow"] == "repeat"
+    assert "ui_message_id" not in payload
+    assert "history_page" not in payload
     occurred_at = datetime.fromisoformat(str(payload["occurred_at"]))
     assert occurred_at.date() == datetime.now(occurred_at.tzinfo).date()
 
     await harness.callback(
         await harness.draft_callback(DraftAction.CONFIRM),
-        int(str(payload.get("ui_message_id", harness.telegram.last_message_id))),
+        await harness.draft_presentation_message_id(),
     )
     assert await _active_transaction_count(harness.factory) == 2
     async with harness.factory() as session:
@@ -698,7 +879,7 @@ async def test_repeat_today_opens_review_and_persists_only_after_confirmation(
 
 
 @pytest.mark.asyncio
-async def test_delete_requires_confirmation_and_trash_can_restore(
+async def test_finance_query_callbacks_and_delete_restore_preserve_receipts(
     telegram_harness: TelegramHarness,
 ) -> None:
     harness = telegram_harness
@@ -706,8 +887,75 @@ async def test_delete_requires_confirmation_and_trash_can_restore(
         harness, "275 продукты"
     )
 
+    history_update_id = UPDATE_BASE + harness.offset + 1
+    await harness.callback("h:9", card_message_id)
+    history_receipt_text, history_markup = await _outbox_receipt(
+        harness.factory,
+        history_update_id,
+    )
+    assert "Все операции" in history_receipt_text
+    assert f"tx:view:{transaction_id}:{version}:0" in _callback_data(history_markup)
+
+    view_update_id = UPDATE_BASE + harness.offset + 1
     await harness.callback(
-        f"tx:del:ask:{transaction_id}:{version}:0",
+        f"tx:view:{transaction_id}:{version}:3",
+        card_message_id,
+    )
+    view_receipt_text, view_markup = await _outbox_receipt(harness.factory, view_update_id)
+    assert "<b>Операция</b>" in view_receipt_text
+    view_callbacks = _callback_data(view_markup)
+    assert f"tx:del:ask:{transaction_id}:{version}:3" in view_callbacks
+    assert "h:3" in view_callbacks
+
+    history_replay = Update.model_validate(
+        _callback_update(history_update_id, card_message_id, "h:9"),
+        context={"bot": harness.bot},
+    )
+    await harness.dispatcher.feed_update(harness.bot, history_replay)
+    assert harness.telegram.last_callback_text == "Уже обработано"
+    assert harness.telegram.last_callback_show_alert is False
+
+    stale_update_id = UPDATE_BASE + harness.offset + 1
+    await harness.callback(
+        f"tx:view:{transaction_id}:{version + 1}:3",
+        card_message_id,
+    )
+    assert harness.telegram.last_callback_text == "Операция изменилась"
+    assert harness.telegram.last_callback_show_alert is True
+
+    missing_update_id = UPDATE_BASE + harness.offset + 1
+    await harness.callback(
+        f"tx:view:{uuid7()}:1:3",
+        card_message_id,
+    )
+    assert harness.telegram.last_callback_text == "Операция не найдена"
+    assert harness.telegram.last_callback_show_alert is True
+    async with harness.factory() as session:
+        failed_claims = await session.scalar(
+            text(
+                "SELECT count(*) FROM processed_updates "
+                "WHERE update_id IN (:stale_update_id, :missing_update_id)"
+            ),
+            {
+                "stale_update_id": stale_update_id,
+                "missing_update_id": missing_update_id,
+            },
+        )
+        failed_receipts = await session.scalar(
+            text(
+                "SELECT count(*) FROM telegram_response_outbox "
+                "WHERE update_id IN (:stale_update_id, :missing_update_id)"
+            ),
+            {
+                "stale_update_id": stale_update_id,
+                "missing_update_id": missing_update_id,
+            },
+        )
+    assert failed_claims == 0
+    assert failed_receipts == 0
+
+    await harness.callback(
+        f"tx:del:ask:{transaction_id}:{version}:3",
         card_message_id,
     )
     async with harness.factory() as session:
@@ -720,10 +968,8 @@ async def test_delete_requires_confirmation_and_trash_can_restore(
     assert row.deleted_at is None
     assert row.version == version
 
-    await harness.callback(
-        f"tx:del:do:{transaction_id}:{version}:0",
-        card_message_id,
-    )
+    delete_update_id = UPDATE_BASE + harness.offset + 1
+    await harness.callback(f"tx:del:do:{transaction_id}:{version}:3", card_message_id)
     async with harness.factory() as session:
         deleted = (
             await session.execute(
@@ -733,10 +979,69 @@ async def test_delete_requires_confirmation_and_trash_can_restore(
         ).one()
     assert deleted.deleted_at is not None
     assert deleted.version == version + 1
+    _, delete_receipt_markup = await _outbox_receipt(harness.factory, delete_update_id)
+    delete_callbacks = _callback_data(delete_receipt_markup)
+    assert f"tx:restore:{transaction_id}:{deleted.version}:3" in delete_callbacks
+    assert "h:3" in delete_callbacks
 
-    await harness.callback("z:list:0", card_message_id)
+    restore_update_id = UPDATE_BASE + harness.offset + 1
     await harness.callback(
-        f"z:restore:{transaction_id}:{deleted.version}:0",
+        f"tx:restore:{transaction_id}:{deleted.version}:3",
+        card_message_id,
+    )
+    async with harness.factory() as session:
+        restored_direct = (
+            await session.execute(
+                text("SELECT deleted_at, version FROM transactions WHERE id = :id"),
+                {"id": transaction_id},
+            )
+        ).one()
+    assert restored_direct.deleted_at is None
+    assert restored_direct.version == version + 2
+    _, restore_receipt_markup = await _outbox_receipt(harness.factory, restore_update_id)
+    restore_callbacks = _callback_data(restore_receipt_markup)
+    assert f"tx:del:ask:{transaction_id}:{restored_direct.version}:3" in restore_callbacks
+    assert "h:3" in restore_callbacks
+
+    await harness.callback(
+        f"tx:del:do:{transaction_id}:{restored_direct.version}:0",
+        card_message_id,
+    )
+    async with harness.factory() as session:
+        deleted_again = (
+            await session.execute(
+                text("SELECT deleted_at, version FROM transactions WHERE id = :id"),
+                {"id": transaction_id},
+            )
+        ).one()
+    assert deleted_again.deleted_at is not None
+    assert deleted_again.version == version + 3
+
+    trash_page_update_id = UPDATE_BASE + harness.offset + 1
+    await harness.callback("z:list:0", card_message_id)
+    trash_page_text, trash_page_markup = await _outbox_receipt(
+        harness.factory,
+        trash_page_update_id,
+    )
+    assert "Корзина" in trash_page_text
+    assert f"z:view:{transaction_id}:{deleted_again.version}:0" in _callback_data(trash_page_markup)
+
+    trash_view_update_id = UPDATE_BASE + harness.offset + 1
+    await harness.callback(
+        f"z:view:{transaction_id}:{deleted_again.version}:0",
+        card_message_id,
+    )
+    trash_view_text, trash_view_markup = await _outbox_receipt(
+        harness.factory,
+        trash_view_update_id,
+    )
+    assert "Операция в Корзине" in trash_view_text
+    assert f"z:restore:{transaction_id}:{deleted_again.version}:0" in _callback_data(
+        trash_view_markup
+    )
+
+    await harness.callback(
+        f"z:restore:{transaction_id}:{deleted_again.version}:0",
         card_message_id,
     )
     async with harness.factory() as session:
@@ -747,7 +1052,7 @@ async def test_delete_requires_confirmation_and_trash_can_restore(
             )
         ).one()
     assert restored.deleted_at is None
-    assert restored.version == version + 2
+    assert restored.version == version + 4
 
 
 @pytest.mark.asyncio
@@ -757,7 +1062,7 @@ async def test_explicit_rule_is_staged_then_saved_atomically_and_overrides_built
     harness = telegram_harness
     await harness.message("321 кофе у маяка")
     _, state, initial_payload, _, _ = await harness.draft()
-    assert state == "quick_confirm"
+    assert state == "review"
 
     async with harness.factory() as session:
         user_id = await session.scalar(
@@ -785,9 +1090,9 @@ async def test_explicit_rule_is_staged_then_saved_atomically_and_overrides_built
 
     await harness.callback(
         await harness.draft_callback(DraftAction.EDIT_CATEGORY),
-        int(str(initial_payload.get("ui_message_id", harness.telegram.last_message_id))),
+        await harness.draft_presentation_message_id(),
     )
-    _, state, review_payload, _, _ = await harness.draft()
+    _, state, _, _, _ = await harness.draft()
     assert state == "review_category"
     await harness.callback(
         await harness.draft_callback(
@@ -795,16 +1100,16 @@ async def test_explicit_rule_is_staged_then_saved_atomically_and_overrides_built
             object_id=groceries.id,
             object_version=groceries.version,
         ),
-        int(str(review_payload["ui_message_id"])),
+        await harness.draft_presentation_message_id(),
     )
     _, state, corrected_payload, _, _ = await harness.draft()
-    assert state == "quick_confirm"
+    assert state == "review"
     assert corrected_payload["category_id"] == str(groceries.id)
     assert corrected_payload.get("rule_offer_pattern")
 
     await harness.callback(
         await harness.draft_callback(DraftAction.RULE_GLOBAL),
-        int(str(corrected_payload["ui_message_id"])),
+        await harness.draft_presentation_message_id(),
     )
     _, _, staged_payload, _, _ = await harness.draft()
     assert staged_payload["pending_rule"] == {
@@ -835,7 +1140,7 @@ async def test_explicit_rule_is_staged_then_saved_atomically_and_overrides_built
         await session.commit()
 
     confirm = await harness.draft_callback(DraftAction.CONFIRM)
-    await harness.callback(confirm, int(str(staged_payload["ui_message_id"])))
+    await harness.callback(confirm, await harness.draft_presentation_message_id())
     async with harness.factory() as session:
         # The rule upsert happens before transaction validation, so this proves
         # both writes still roll back together when saving the transaction fails.
@@ -859,7 +1164,7 @@ async def test_explicit_rule_is_staged_then_saved_atomically_and_overrides_built
         )
         await session.commit()
 
-    await harness.callback(confirm, int(str(staged_payload["ui_message_id"])))
+    await harness.callback(confirm, await harness.draft_presentation_message_id())
     async with harness.factory() as session:
         assert (
             await session.scalar(
@@ -878,7 +1183,7 @@ async def test_explicit_rule_is_staged_then_saved_atomically_and_overrides_built
 
     await harness.message("322 кофе у маяка")
     _, learned_state, learned_payload, _, _ = await harness.draft()
-    assert learned_state == "quick_confirm"
+    assert learned_state == "review"
     assert learned_payload["category_id"] == str(groceries.id)
     assert learned_payload["category_id"] != initial_payload["category_id"]
 
@@ -907,23 +1212,26 @@ async def test_confirm_revalidates_staged_rule_against_final_description(
 
     await harness.callback(
         await harness.draft_callback(DraftAction.EDIT_CATEGORY),
-        int(str(initial_payload["ui_message_id"])),
+        await harness.draft_presentation_message_id(),
     )
-    _, _, category_payload, _, _ = await harness.draft()
+    _, category_state, _, _, _ = await harness.draft()
+    assert category_state == "review_category"
     await harness.callback(
         await harness.draft_callback(
             DraftAction.SELECT_CATEGORY,
             object_id=groceries.id,
             object_version=groceries.version,
         ),
-        int(str(category_payload["ui_message_id"])),
+        await harness.draft_presentation_message_id(),
     )
-    _, _, corrected_payload, _, _ = await harness.draft()
+    _, corrected_state, _, _, _ = await harness.draft()
+    assert corrected_state == "review"
     await harness.callback(
         await harness.draft_callback(DraftAction.RULE_GLOBAL),
-        int(str(corrected_payload["ui_message_id"])),
+        await harness.draft_presentation_message_id(),
     )
-    _, _, staged_payload, _, _ = await harness.draft()
+    _, staged_state, _, _, _ = await harness.draft()
+    assert staged_state == "review"
 
     # Simulate stale metadata from an older client/path: confirm must validate the
     # rule against the final payload instead of trusting pending_rule blindly.
@@ -939,7 +1247,7 @@ async def test_confirm_revalidates_staged_rule_against_final_description(
 
     await harness.callback(
         await harness.draft_callback(DraftAction.CONFIRM),
-        int(str(staged_payload["ui_message_id"])),
+        await harness.draft_presentation_message_id(),
     )
     async with harness.factory() as session:
         assert (
@@ -990,21 +1298,23 @@ async def test_rule_intent_is_cleared_when_back_changes_account(
 
     await harness.callback(
         await harness.draft_callback(DraftAction.EDIT_CATEGORY),
-        int(str(initial_payload["ui_message_id"])),
+        await harness.draft_presentation_message_id(),
     )
-    _, _, category_payload, _, _ = await harness.draft()
+    _, category_state, _, _, _ = await harness.draft()
+    assert category_state == "review_category"
     await harness.callback(
         await harness.draft_callback(
             DraftAction.SELECT_CATEGORY,
             object_id=groceries.id,
             object_version=groceries.version,
         ),
-        int(str(category_payload["ui_message_id"])),
+        await harness.draft_presentation_message_id(),
     )
-    _, _, corrected_payload, _, _ = await harness.draft()
+    _, corrected_state, _, _, _ = await harness.draft()
+    assert corrected_state == "review"
     await harness.callback(
         await harness.draft_callback(DraftAction.RULE_ACCOUNT),
-        int(str(corrected_payload["ui_message_id"])),
+        await harness.draft_presentation_message_id(),
     )
     _, _, staged_payload, _, _ = await harness.draft()
     assert staged_payload["pending_rule"] == {
@@ -1016,10 +1326,10 @@ async def test_rule_intent_is_cleared_when_back_changes_account(
 
     await harness.callback(
         await harness.draft_callback(DraftAction.BACK),
-        int(str(staged_payload["ui_message_id"])),
+        await harness.draft_presentation_message_id(),
     )
     _, back_state, back_payload, _, _ = await harness.draft()
-    assert back_state == "quick_account"
+    assert back_state == "account_required"
     assert "account_id" not in back_payload
     assert "pending_rule" not in back_payload
     assert "rule_offer_pattern" not in back_payload
@@ -1030,16 +1340,16 @@ async def test_rule_intent_is_cleared_when_back_changes_account(
             object_id=second_account.id,
             object_version=second_account.version,
         ),
-        int(str(back_payload["ui_message_id"])),
+        await harness.draft_presentation_message_id(),
     )
     _, final_state, final_payload, _, _ = await harness.draft()
-    assert final_state == "quick_confirm"
+    assert final_state == "review"
     assert final_payload["account_id"] == str(second_account.id)
     assert "pending_rule" not in final_payload
 
     await harness.callback(
         await harness.draft_callback(DraftAction.CONFIRM),
-        int(str(final_payload["ui_message_id"])),
+        await harness.draft_presentation_message_id(),
     )
     async with harness.factory() as session:
         assert (
@@ -1176,16 +1486,17 @@ async def test_catalog_callbacks_reject_stale_versions_and_typed_rename_is_guard
 
     await harness.message("Просроченное имя")
     async with harness.factory() as session:
-        assert (
-            await session.scalar(
-                text("SELECT name FROM accounts WHERE id = :account_id"),
+        current = (
+            await session.execute(
+                text("SELECT name, version FROM accounts WHERE id = :account_id"),
                 {"account_id": account_id},
             )
-            == "Ещё новее"
-        )
+        ).one()
+        assert current.name == "Ещё новее"
     guarded_draft = await harness.draft()
     assert guarded_draft[1] == "settings_account_rename"
-    assert guarded_draft[2]["object_version"] == row.version
+    assert current.version > row.version
+    assert guarded_draft[2]["object_version"] == current.version
 
 
 @pytest.mark.asyncio
@@ -1210,13 +1521,13 @@ async def test_review_and_saved_transaction_use_selected_account_currency(
 
     await harness.message("123 ресторан @Доллары")
     _, state, payload, _, _ = await harness.draft()
-    assert state == "quick_confirm"
+    assert state == "review"
     assert payload["currency"] == "USD"
     assert "$" in harness.telegram.last_text
 
     await harness.callback(
         await harness.draft_callback(DraftAction.CONFIRM),
-        int(str(payload["ui_message_id"])),
+        await harness.draft_presentation_message_id(),
     )
     async with harness.factory() as session:
         saved = (
@@ -1232,8 +1543,9 @@ async def test_review_and_saved_transaction_use_selected_account_currency(
 
     await harness.callback(f"tx:repeat:{saved.id}:{saved.version}:0")
     _, repeated_state, repeated_payload, _, _ = await harness.draft()
-    assert repeated_state == "quick_confirm"
+    assert repeated_state == "review"
     assert repeated_payload["currency"] == "USD"
+    assert "ui_message_id" not in repeated_payload
     assert "$" in harness.telegram.last_text
 
 

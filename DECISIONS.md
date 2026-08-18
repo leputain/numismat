@@ -12,17 +12,40 @@
 - UUIDv7 создаётся через `uuid.uuid7()` на Python 3.14.
 - `domain` и `application` не зависят от aiogram, SQLAlchemy или adapters. Framework-specific queries/repositories
   находятся в adapter layer; handlers оркестрируют use cases и presentation.
-- `TransactionParser` — application port. MVP parser детерминированный; AI остаётся вне scope.
-- OCR реализован отдельным application port и локальным Tesseract 5 adapter (`rus+eng`). Pillow проверяет и
-  нормализует недоверенное JPEG/PNG/WebP в памяти; Tesseract получает PNG через stdin с timeout. Изображение и сырой
-  текст не сохраняются. Фискальный чек остаётся одной review-операцией с итогом. Банковский список может дать до 20
-сильных строк-кандидатов с явным знаком и денежной дробной суммой. Повреждённая валюта заменяется валютой счёта; распознанная чужая или смешанная валюта
-отклоняет весь batch. Строки хранятся как нормализованная draft-очередь и проходят
-  review последовательно, без bulk-save. Каждый save/skip, включая последний, — явное действие владельца. Неполный или неоднозначный batch
-  отвергается целиком, а cancel удаляет очередь,
-  но не разворачивает уже сохранённые transactions.
+- `bootstrap.py` остаётся composition root. Выделенные Telegram routers и controllers не выполняют прямые SQLAlchemy
+  queries, `commit` или business persistence: router ограниченно декодирует transport input и выбирает controller,
+  controller вызывает application use case через внедрённые ports/UoW, а post-commit delivery остаётся outer adapter.
+- Детерминированный `TransactionParser` остаётся default и не имеет AI fallback. Optional local Ollama реализует
+  отдельный async suggestion port и вызывается только через `/ai`; network call завершается до DB mutation UoW.
+  Exact-schema output считается недоверенным и может создать лишь общий review draft. Active draft не заменяется и
+  не получает hidden intent; provider/model/URL/prompt/output/finance values не попадают в логи. External/cloud AI
+  остаётся вне financial-data path.
+- Первый MCP milestone является отдельным local stdio read adapter, а не новым application API и не сетевым
+  сервисом. Он переиспользует bounded finance/catalog query use cases, фиксирует configured owner внутри процесса и
+  выполняет каждый tool в `READ ONLY REPEATABLE READ` UoW. Production MCP получает отдельный SELECT-only DB role;
+  mutation tools, arbitrary SQL, owner/tool credentials и protocol/result logging запрещены.
+- OCR реализован application use case `ProcessOcrImage`, отдельным port и локальным Tesseract 5 adapter (`rus+eng`).
+  Telegram image router получает bounded bytes, после idempotency claim controller передаёт их в use case. Pillow
+  проверяет и нормализует недоверенное JPEG/PNG/WebP в памяти; Tesseract получает PNG через stdin с timeout.
+  Изображение и сырой текст не сохраняются. Фискальный чек остаётся одной review-операцией с итогом. Банковский
+  список может дать до 20 сильных строк-кандидатов с явным знаком и денежной дробной суммой. Повреждённая валюта
+  заменяется валютой счёта; распознанная чужая или смешанная валюта отклоняет весь batch. Строки хранятся как
+  нормализованная draft-очередь и проходят review последовательно, без bulk-save. Каждый save/skip, включая
+  последний, — явное действие владельца. Неполный или неоднозначный batch отвергается целиком, а cancel удаляет
+  очередь, но не разворачивает уже сохранённые transactions.
+- Bank CSV import — отдельный staged workflow, а не OCR-очередь и не direct bank integration. Strict
+  bounded parsing и keyed digesting завершаются до mutation UoW; в PostgreSQL попадают только normalized
+  finance fields и 32-byte fingerprint/reference digests. Каждая строка требует явного review-confirm,
+  link или skip; deterministic reconciliation ничего не связывает автоматически. Точный transaction
+  provenance `source=bank_import/import_row_id` фиксируется в одной owner-locked transaction с confirm.
+- `BANK_IMPORT_SECURITY_KEY` — отдельный privacy/deduplication data-key, не HTTP master key. Сырые bank
+  references намеренно не хранятся, поэтому transparent rekey невозможен. Rotation начинает новую
+  dedupe epoch: будущие импорты защищены новым ключом, но cross-epoch duplicates могут не распознаться.
 - Для быстрого ввода отсутствие знака и `-` означают расход, `+` — доход. Знак не хранится в amount; amount всегда
   положительный. Многословные `@account` и `#category` требуют кавычек, чтобы границы значения были однозначны.
+- Typed text ingress имеет один fail-closed порядок: finance draft, transaction edit, settings draft, затем quick
+  input. Переход к следующему controller разрешён только по его явному `NotApplicable`; validation/application error
+  или уже обработанный update завершает dispatch и не может случайно превратиться в quick transaction intent.
 - Быстрое сохранение без review удалено из UX. Quick input, wizard и repeat создают persistent draft и требуют
   отдельного «Сохранить»; legacy `fast_mode` может временно оставаться только как schema compatibility detail.
 - Review является единым editor для типа, суммы, категории, счёта, даты и комментария. Telegram UI редактирует одно
@@ -31,6 +54,69 @@
   обучение по истории запрещено. Account-scoped rule приоритетнее global; затем сравниваются длина фразы и версия.
 - У владельца один active draft. Конфликт нового намерения разрешается явно через resume/replace/keep; revision,
   suspended flag и presentation reference нужны для отклонения stale UI без потери черновика.
+- Любая application mutation черновика принимает точный `DraftRef` — UUID и ожидаемую revision. Telegram callback
+  дополнительно сверяет owner-scoped projection с исходными chat/message и rendered revision под теми же locks;
+  несовпадение отклоняется до business mutation.
+- Application draft не содержит Telegram chat/message identifiers. Актуальная Telegram binding хранится в отдельной
+  `telegram_draft_presentations` projection и обновляется только для совпадающих draft UUID/revision. Введённые
+  миграцией `0005` `history_page`/`pending_history_page` принадлежат только Telegram projection/outbox context и не
+  входят в shared draft DTO/payload. Legacy binding временно сохранена как rolling-deploy/downgrade compatibility
+  boundary; downgrade возвращает в неё только projection, совпадающую с текущей revision.
+- Telegram mutation controllers используют одну внешнюю SQLAlchemy transaction через `TelegramMutationExecutor`:
+  update claim, owner lock, application mutation, audit/draft changes и response outbox либо фиксируются вместе,
+  либо полностью откатываются. Telegram network I/O не выполняется внутри этой транзакции.
+- HTTP ingress использует собственный idempotency contract и не переиспользует Telegram `update_id`. Alembic `0007`
+  хранит только keyed digests, bounded status/result references и session expiry; repositories участвуют во внешней
+  транзакции вместе с business mutation и не коммитят самостоятельно. Закрытый `HttpRevisionMutationService` не
+  предоставляет generic/direct transaction create: новая и повторяемая операция проходят shared review draft.
+  Replay строится только из сохранённых status/result kind/UUID/revision без перечитывания изменившейся сущности;
+  несовместимая семантика того же key возвращает typed `409`. Same-key confirm даёт точный `201/201` replay, а
+  different-key race после consume — `201/404`. Будущая draft schema видна как `unsupported`, и старый HTTP API её
+  не изменяет и не удаляет. M2 FastAPI process существует как отдельный ASGI entry point; routes используют общий
+  application API.
+- Telegram Mini App auth проверяет HMAC всего bounded raw `initData` до разбора доверенной identity, принимает только
+  configured owner и окно `auth_date` 5 минут с 30-секундным future skew. Replay key выводится из уже проверенного
+  Telegram hash, поэтому перестановка параметров и эквивалентное percent-encoding не обходят защиту; proof удерживается
+  до конца TTL + skew и не освобождается logout. Потерянный первый auth response требует заново открыть Mini App.
+- Session и CSRF — независимые 256-bit opaque tokens. В БД попадают только domain-separated keyed digests; cookie
+  host-only, Secure и SameSite=Strict, session cookie дополнительно HttpOnly. Exact Origin и double-submit CSRF
+  обязательны для logout и protected mutation endpoints. Shared session lock живёт в той же transaction, что mutation;
+  logout использует exclusive lock, а cookies формируются только после успешного commit.
+- HTTP finance read model не дублирует доменную модель: FastAPI schemas отображают shared query DTO, а SQL adapters
+  исполняют auth и составной read в одной `READ ONLY REPEATABLE READ` transaction. Minor units сериализуются decimal
+  strings из-за ограничений JavaScript Number; валюты, категории, recent/report rows и page size fail-closed bounded.
+- Transaction list использует live keyset `(occurred_at DESC, id DESC)` и owner/domain-bound full HMAC cursor. Cursor
+  считается opaque API token и защищён от подделки, но не зашифрован: timestamp/UUID уже были показаны клиенту.
+  Гарантируется стабильный порядок и повтор на неизменном наборе, не snapshot traversal при concurrent edit; после
+  любой mutation frontend сбрасывает cursor и начинает список заново.
+- HTTP catalog read model является complete-but-bounded: database adapter запрашивает `cap + 1`, а application либо
+  возвращает весь набор до 200 элементов, либо fail closed с `catalog_unavailable`. Silent truncation запрещён. Все
+  destination-growing writers используют один owner lock и тот же capacity probe, включая custom draft input.
+- FastAPI `app.openapi()` — единственный backend contract source. Offline exporter собирает полный injected surface
+  без runtime settings/БД, проверяет local JSON Pointers и атомарно записывает canonical JSON; generated clients не
+  должны поддерживать параллельные hand-written DTO.
+- Mini App запускается только через per-chat `MenuButtonWebApp` exact configured owner. Default menu принудительно
+  остаётся commands, а обнаруженный `getMe.has_main_web_app` останавливает bot startup: глобальный BotFather Main Mini
+  App несовместим с single-owner boundary. Отсутствующий private chat повторно конфигурируется после `/start`/`/menu`.
+- Production web edge — отдельный pinned multi-stage image: один canonical HTTPS Host, same-origin `/api/*`, immutable
+  hashed assets и extensionless BrowserRouter fallback. API состоит только в `data + api-edge`; публичная network
+  принадлежит web, поэтому reverse proxy не превращает API container в egress/public boundary.
+- Expired HTTP security state очищает FastAPI lifespan task, а не отдельный scheduler stack. Transaction-scoped
+  PostgreSQL advisory lock выбирает одного replica, каждый tick ограничен batch/timeout и логирует только event/result.
+- Recurring schedules обслуживает отдельный DB-only runner без Celery/cron service dependency. Due materialization и
+  draft staging — две independently committed bounded фазы с разными transaction advisory locks; owner lock всегда
+  предшествует schedule/instance/draft. Runner создаёт только обычный review draft, а существующий active draft
+  оставляет due instance pending с backoff. Timezone schedule неизменяем, DST gap/fold и monthly clamp определены
+  доменом; `(schedule_id, occurrence_index)` и transaction provenance уникальны на уровне PostgreSQL.
+- Exchange rates моделируются как owner-scoped manual source и append-only version/entries. Значение хранится
+  integer `coefficient + scale`, конвертация агрегата использует integer HALF_EVEN. Отчёт обязан получить явный UUID
+  версии; latest lookup, inverse и triangulation сознательно запрещены, чтобы результат оставался воспроизводимым и
+  отсутствие курса завершалось fail closed. Исходная transaction никогда не конвертируется и не переписывается.
+- Explicit category learning сохраняет полный deterministic precedence только внутри bounded namespace: до 512 rules
+  на owner/kind читаются целиком, 513-я строка означает fail-closed corruption/legacy overflow. New upsert берёт owner
+  lock; silently выбирать кандидата из усечённого набора запрещено.
+- Python dependency audit строится из `uv export --frozen --no-dev --no-emit-project` с hashes и запускает
+  `pip-audit --no-deps`; аудит текущего mutable environment не считается release evidence.
 - «Повторить сегодня» никогда не копирует строку напрямую в transactions: оно создаёт review draft с текущей локальной
   датой, оставляя исходную операцию неизменной.
 - Удаление двухэтапное и мягкое. Корзина — отдельная read model удалённых строк; restore проверяет optimistic version.
@@ -38,6 +124,13 @@
   транзакцию запрещён.
 - Report periods используют inclusive UTC start и exclusive UTC end. CSV отображает время в timezone пользователя,
   форматирует money целочисленно и нейтрализует spreadsheet formula prefixes в user-controlled cells.
+- CSV export представлен durable outbox job с единственным marker `csv_export:v1`. Generated bytes, filename и row
+  count не записываются в БД, логи или временные файлы: после commit delivery повторно разрешает точную пару
+  Telegram owner user/chat и формирует export из текущего состояния БД в памяти. Это сознательно не request-time
+  snapshot. Export ограничен 10 000 строками и 16 MiB и сохраняет spreadsheet-formula defense. Внешняя отправка
+  честно at-least-once: crash после принятия Telegram document, но до `sent_at`, может дать второй файл, не вторую
+  business mutation. Downgrade `0006 -> 0005` блокируется, пока не удалены все CSV export job rows, включая уже
+  доставленные.
 - Accounts и categories используют reversible soft archive. Historical transactions сохраняют foreign keys; основной
   или последний usable account и последнюю категорию типа архивировать нельзя.
 - Runtime и migration PostgreSQL URLs — разные production secrets: bot не получает DDL privileges.

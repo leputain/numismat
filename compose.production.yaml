@@ -11,6 +11,7 @@ services:
       - db_data:/var/lib/postgresql
       - ./deploy/postgres/001-runtime-boundary.sql:/docker-entrypoint-initdb.d/001-runtime-boundary.sql:ro
     healthcheck: {test: ["CMD-SHELL", "pg_isready -U finbot_migrations -d finbot"], interval: 5s, timeout: 5s, retries: 10}
+    networks: [data]
   migrate:
     build: .
     command: ["alembic", "upgrade", "head"]
@@ -18,6 +19,7 @@ services:
     secrets:
       - source: database_url_migrations
         target: database_url
+    networks: [data]
   provision-runtime:
     build: .
     command: ["python", "-m", "finbot.adapters.database.provision"]
@@ -25,6 +27,16 @@ services:
     secrets:
       - database_url_migrations
       - database_url_runtime
+    networks: [data]
+  provision-mcp:
+    profiles: [mcp]
+    build: .
+    command: ["python", "-m", "finbot.adapters.database.provision_readonly"]
+    depends_on: {migrate: {condition: service_completed_successfully}}
+    secrets:
+      - database_url_migrations
+      - database_url_mcp
+    networks: [data]
   bot:
     build: .
     user: "10001:10001"
@@ -41,20 +53,161 @@ services:
       DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Europe/Moscow}
       DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-RUB}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MINIAPP_PUBLIC_URL: ${MINIAPP_PUBLIC_URL:?MINIAPP_PUBLIC_URL is required}
+      LOCAL_AI_ENABLED: ${LOCAL_AI_ENABLED:-false}
+      LOCAL_AI_ENDPOINT: ${LOCAL_AI_ENDPOINT:-}
+      LOCAL_AI_MODEL: ${LOCAL_AI_MODEL:-}
     depends_on: {provision-runtime: {condition: service_completed_successfully}}
     secrets:
       - telegram_bot_token
       - source: database_url_runtime
         target: database_url
+      - bank_import_security_key
     logging: {driver: local, options: {max-size: "10m", max-file: "5"}}
     healthcheck:
       test: ["CMD", "python", "-m", "finbot.healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      telegram-egress: {gw_priority: 1}
+      data: {}
+      local-ai: {}
+  api:
+    build: .
+    command: ["python", "-m", "finbot.adapters.http.server"]
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:noexec,nosuid,nodev,size=16m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    pids_limit: 100
+    environment:
+      OWNER_TELEGRAM_USER_ID: ${OWNER_TELEGRAM_USER_ID:-0}
+      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-ru_RU}
+      DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Europe/Moscow}
+      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-RUB}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+      MINIAPP_PUBLIC_URL: ${MINIAPP_PUBLIC_URL:?MINIAPP_PUBLIC_URL is required}
+    depends_on: {provision-runtime: {condition: service_completed_successfully}}
+    expose: ["8080"]
+    secrets:
+      - telegram_bot_token
+      - source: database_url_runtime
+        target: database_url
+      - http_security_key
+      - bank_import_security_key
+    logging: {driver: local, options: {max-size: "10m", max-file: "5"}}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=5).close()
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks: [data, api-edge]
+  recurring-runner:
+    build: .
+    command: ["python", "-m", "finbot.recurring_runner"]
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:noexec,nosuid,nodev,size=16m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    pids_limit: 50
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      RECURRING_TICK_INTERVAL_SECONDS: ${RECURRING_TICK_INTERVAL_SECONDS:-30}
+    depends_on: {provision-runtime: {condition: service_completed_successfully}}
+    secrets:
+      - source: database_url_runtime
+        target: database_url
+    logging: {driver: local, options: {max-size: "10m", max-file: "5"}}
+    networks: [data]
+  mcp:
+    profiles: [mcp]
+    build: .
+    command: ["python", "-m", "finbot.adapters.mcp"]
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:noexec,nosuid,nodev,size=16m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    pids_limit: 50
+    stdin_open: true
+    environment:
+      OWNER_TELEGRAM_USER_ID: ${OWNER_TELEGRAM_USER_ID:-0}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on: {provision-mcp: {condition: service_completed_successfully}}
+    secrets:
+      - source: database_url_mcp
+        target: database_url
+    logging: {driver: local, options: {max-size: "10m", max-file: "5"}}
+    networks: [data]
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    user: "101:101"
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 15s
+    pids_limit: 50
+    environment:
+      MINIAPP_PUBLIC_URL: ${MINIAPP_PUBLIC_URL:?MINIAPP_PUBLIC_URL is required}
+    depends_on: {api: {condition: service_healthy}}
+    ports: ["${MINIAPP_HTTPS_BIND:-0.0.0.0}:${MINIAPP_HTTPS_PORT:-443}:8443"]
+    secrets:
+      - source: miniapp_tls_fullchain
+        target: miniapp_tls_fullchain
+      - source: miniapp_tls_private_key
+        target: miniapp_tls_private_key
+    logging: {driver: local, options: {max-size: "10m", max-file: "5"}}
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - -T
+        - "4"
+        - -O
+        - /dev/null
+        - http://127.0.0.1:8080/__edge/live
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      public-edge: {gw_priority: 1}
+      api-edge: {}
 volumes: {db_data: {}}
+networks:
+  data: {internal: true}
+  api-edge: {internal: true}
+  public-edge: {}
+  telegram-egress: {}
+  local-ai: {internal: true}
 secrets:
   telegram_bot_token: {file: ./secrets/telegram_bot_token}
   database_url_runtime: {file: ./secrets/database_url_runtime}
+  database_url_mcp: {file: ./secrets/database_url_mcp}
   database_url_migrations: {file: ./secrets/database_url_migrations}
   postgres_password: {file: ./secrets/postgres_password}
+  http_security_key: {file: ./secrets/http_security_key}
+  bank_import_security_key: {file: ./secrets/bank_import_security_key}
+  miniapp_tls_fullchain: {file: ./secrets/miniapp_tls_fullchain.pem}
+  miniapp_tls_private_key: {file: ./secrets/miniapp_tls_private_key.pem}

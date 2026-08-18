@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 from uuid import UUID
 
@@ -9,6 +9,9 @@ from finbot.domain.category_rules import (
     validate_rule_pattern,
 )
 from finbot.domain.transactions import TransactionType
+
+MAX_CATEGORY_RULES_PER_OWNER_KIND = 512
+CATEGORY_RULE_FETCH_LIMIT = MAX_CATEGORY_RULES_PER_OWNER_KIND + 1
 
 
 class CategoryRuleReader(Protocol):
@@ -33,8 +36,8 @@ class CategoryRuleWriter(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class CategorizationDecision:
-    category_id: UUID
-    rule_id: UUID
+    category_id: UUID = field(repr=False)
+    rule_id: UUID = field(repr=False)
 
 
 async def resolve_learned_category(

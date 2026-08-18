@@ -5,27 +5,39 @@ description = "Personal Telegram bot for income and expense tracking"
 requires-python = ">=3.14,<3.15"
 dependencies = [
   "aiogram==3.30.0",
+  "fastapi==0.141.1",
   "pydantic==2.13.4",
   "pydantic-settings==2.14.2",
   "sqlalchemy[asyncio]==2.0.51",
   "alembic==1.19.0",
   "psycopg[binary]==3.3.4",
   "pillow==12.3.0",
+  "uvicorn==0.52.3",
+  "mcp==2.0.0",
 ]
 
 [dependency-groups]
-dev = ["ruff", "mypy", "pytest", "pytest-asyncio", "hypothesis", "pip-audit"]
+dev = [
+  "ruff",
+  "mypy",
+  "pytest",
+  "pytest-asyncio",
+  "hypothesis",
+  "pip-audit",
+  "httpx2==2.10.0",
+]
 
 [tool.ruff]
 line-length = 100
 target-version = "py314"
 src = ["src"]
+extend-exclude = [".agents"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
 asyncio_mode = "auto"
 
 [tool.mypy]

@@ -12,6 +12,11 @@ from finbot.adapters.database.models import (
     Category,
     Draft,
     Transaction,
+    User,
+)
+from finbot.adapters.database.services.catalogs import (
+    ensure_account_destination_capacity,
+    ensure_category_destination_capacity,
 )
 from finbot.application.services.catalogs import catalog_slug
 from finbot.domain.categories import CATEGORY_ALIASES, EXPENSE_CATEGORIES, INCOME_CATEGORIES
@@ -26,6 +31,7 @@ from finbot.domain.transactions import TransactionDraft
 
 def _snapshot(transaction: Transaction) -> dict[str, object]:
     return {
+        "type": transaction.type,
         "amount_minor": transaction.amount_minor,
         "category_id": str(transaction.category_id),
         "account_id": str(transaction.account_id),
@@ -141,7 +147,19 @@ async def save_transaction(
     currency: str = "RUB",
     update_id: int | None = None,
     default_account_id: UUID | None = None,
+    *,
+    source: str = "manual",
+    recurring_instance_id: UUID | None = None,
+    import_row_id: UUID | None = None,
 ) -> Transaction:
+    if (source == "recurring") != (recurring_instance_id is not None):
+        raise ValueError("recurring transaction provenance is inconsistent")
+    if (source == "bank_import") != (import_row_id is not None):
+        raise ValueError("bank import transaction provenance is inconsistent")
+    if recurring_instance_id is not None and import_row_id is not None:
+        raise ValueError("transaction provenance must be unique")
+    if source not in {"manual", "recurring", "bank_import"}:
+        raise ValueError("transaction source is unsupported")
     category = await resolve_category(session, user_id, draft.type.value, draft.category_hint)
     account = await resolve_account(session, user_id, draft.account_hint, default_account_id)
     item = Transaction(
@@ -153,8 +171,10 @@ async def save_transaction(
         category_id=category.id,
         occurred_at=(draft.occurred_at or datetime.now(UTC)).astimezone(UTC),
         description=draft.description[:500],
-        source="manual",
+        source=source,
         telegram_update_id=update_id,
+        recurring_instance_id=recurring_instance_id,
+        import_row_id=import_row_id,
     )
     session.add(item)
     await session.flush()
@@ -172,6 +192,7 @@ async def _locked_transaction(
         select(Transaction)
         .where(Transaction.id == transaction_id, Transaction.user_id == user_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if transaction is None:
         raise ObjectNotFoundError("Операция не найдена")
@@ -220,6 +241,7 @@ async def edit_transaction(
     transaction_id: UUID,
     version: int,
     *,
+    transaction_type: str | None = None,
     amount_minor: int | None = None,
     category_id: UUID | None = None,
     account_id: UUID | None = None,
@@ -236,18 +258,26 @@ async def edit_transaction(
         if amount_minor <= 0:
             raise ValueError("Сумма должна быть больше нуля")
         transaction.amount_minor = amount_minor
+    if transaction_type is not None:
+        if transaction_type not in {"expense", "income"}:
+            raise ValueError("Неизвестный тип операции")
+        if transaction_type != transaction.type and category_id is None:
+            raise ValueError("Изменение типа требует совместимую категорию")
+    effective_type = transaction_type or transaction.type
     if category_id is not None:
         category = await session.scalar(
             select(Category).where(
                 Category.id == category_id,
                 Category.user_id == user_id,
-                Category.kind == transaction.type,
+                Category.kind == effective_type,
                 Category.archived_at.is_(None),
             )
         )
         if category is None:
             raise UnknownCategoryError("выбранная")
         transaction.category_id = category.id
+    if transaction_type is not None:
+        transaction.type = transaction_type
     if account_id is not None:
         account = await session.scalar(
             select(Account).where(
@@ -301,6 +331,9 @@ async def undo_last_action(session: AsyncSession, user_id: UUID) -> UndoResult |
         elif event.action == "update":
             old_raw = event.data.get("old")
             if isinstance(old_raw, dict):
+                old_type = old_raw.get("type")
+                if old_type in {"expense", "income"}:
+                    transaction.type = str(old_type)
                 transaction.amount_minor = int(str(old_raw["amount_minor"]))
                 transaction.category_id = UUID(str(old_raw["category_id"]))
                 transaction.account_id = UUID(str(old_raw["account_id"]))
@@ -330,8 +363,20 @@ async def get_draft(
 ) -> Draft | None:
     query = select(Draft).where(Draft.user_id == user_id)
     if for_update:
-        query = query.with_for_update()
+        query = query.with_for_update().execution_options(populate_existing=True)
     return await session.scalar(query)  # type: ignore[no-any-return]
+
+
+async def _lock_draft_owner(session: AsyncSession, user_id: UUID) -> None:
+    """Lock the durable mutex for an owner's single active-draft slot."""
+    owner = await session.scalar(
+        select(User)
+        .where(User.id == user_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if owner is None:
+        raise ObjectNotFoundError("Владелец не найден")
 
 
 async def put_draft(
@@ -350,6 +395,10 @@ async def put_draft(
     stale callback, while ``new_flow`` replaces the row so a previous flow's
     callbacks cannot accidentally target the new draft id.
     """
+    # A draft row cannot be locked while the slot is empty. The durable owner
+    # row is therefore the mutex shared with the application DraftRepository
+    # for create and explicit replacement operations.
+    await _lock_draft_owner(session, user_id)
     draft = await get_draft(session, user_id, for_update=True)
     if expected_revision is not None or expected_draft_id is not None:
         if (
@@ -439,6 +488,7 @@ async def create_or_get_category(
     if category is not None and category.archived_at is not None:
         raise ValueError("Категория с таким названием находится в архиве")
     if category is None:
+        await ensure_category_destination_capacity(session, user_id, archived=False)
         category = Category(user_id=user_id, kind=kind, name=clean.title(), slug=slug)
         session.add(category)
         await session.flush()
@@ -464,6 +514,7 @@ async def create_or_get_account(
     if account is not None and account.archived_at is not None:
         raise ValueError("Счёт с таким названием находится в архиве")
     if account is None:
+        await ensure_account_destination_capacity(session, user_id, archived=False)
         account = Account(
             user_id=user_id,
             name=clean.title(),

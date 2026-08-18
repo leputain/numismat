@@ -1,0 +1,226 @@
+# The loopback-only probe is intentionally plain HTTP and has no request log.
+server {
+    listen 127.0.0.1:8080;
+    server_name "";
+    access_log off;
+
+    location = /__edge/live {
+        return 204;
+    }
+    location / {
+        return 404;
+    }
+}
+
+# Unknown Host values are never redirected to the canonical host.
+server {
+    listen 8443 ssl default_server;
+    http2 on;
+    server_name _;
+    ssl_certificate /run/secrets/miniapp_tls_fullchain;
+    ssl_certificate_key /run/secrets/miniapp_tls_private_key;
+    include /etc/nginx/numismat/security-headers.conf;
+    return 421;
+}
+
+server {
+    listen 8443 ssl;
+    http2 on;
+    server_name ${MINIAPP_PUBLIC_HOST};
+    ssl_certificate /run/secrets/miniapp_tls_fullchain;
+    ssl_certificate_key /run/secrets/miniapp_tls_private_key;
+
+    root /usr/share/nginx/html;
+    client_max_body_size 16k;
+    error_page 413 = @request_too_large;
+    error_page 429 = @bank_import_rate_limited;
+    error_page 502 504 = @api_unavailable;
+
+    location = /api {
+        include /etc/nginx/numismat/security-headers.conf;
+        add_header Cache-Control "no-store, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        default_type application/json;
+        return 404 '{"error":{"code":"not_found","message":"Ресурс не найден"}}';
+    }
+
+    location = /api/v1/bank-imports/upload {
+        if ($request_method != POST) { return 405; }
+        client_max_body_size 2m;
+        limit_req zone=bank_import_upload burst=1 nodelay;
+        limit_req_status 429;
+        proxy_pass http://finbot_api;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header Forwarded "";
+        proxy_set_header Proxy "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-Port "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header X-Real-IP "";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 30s;
+        proxy_read_timeout 30s;
+        proxy_next_upstream off;
+        proxy_intercept_errors on;
+        # Let the API authenticate session+CSRF before the full CSV is accepted.
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_max_temp_file_size 0;
+        proxy_socket_keepalive on;
+        proxy_hide_header Server;
+        include /etc/nginx/numismat/security-headers.conf;
+    }
+
+    location ^~ /api/ {
+        proxy_pass http://finbot_api;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header Forwarded "";
+        proxy_set_header Proxy "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-Port "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header X-Real-IP "";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 30s;
+        proxy_read_timeout 30s;
+        proxy_next_upstream off;
+        proxy_intercept_errors on;
+        proxy_request_buffering on;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_max_temp_file_size 0;
+        proxy_socket_keepalive on;
+        proxy_hide_header Server;
+        include /etc/nginx/numismat/security-headers.conf;
+    }
+
+    location = /health/live {
+        proxy_pass http://finbot_api;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header Forwarded "";
+        proxy_set_header Proxy "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-Port "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header X-Real-IP "";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 10s;
+        proxy_read_timeout 10s;
+        proxy_next_upstream off;
+        proxy_intercept_errors on;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_hide_header Server;
+        include /etc/nginx/numismat/security-headers.conf;
+    }
+
+    location = /health/ready {
+        proxy_pass http://finbot_api;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header Forwarded "";
+        proxy_set_header Proxy "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-Port "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header X-Real-IP "";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 10s;
+        proxy_read_timeout 10s;
+        proxy_next_upstream off;
+        proxy_intercept_errors on;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_hide_header Server;
+        include /etc/nginx/numismat/security-headers.conf;
+    }
+
+    location ^~ /health/ {
+        include /etc/nginx/numismat/security-headers.conf;
+        add_header Cache-Control "no-store, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        return 404;
+    }
+
+    location = /assets {
+        include /etc/nginx/numismat/security-headers.conf;
+        add_header Cache-Control "no-store, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        return 404;
+    }
+
+    location ^~ /assets/ {
+        if ($request_method !~ ^(?:GET|HEAD)$) { return 405; }
+        include /etc/nginx/numismat/security-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri @asset_not_found;
+    }
+
+    location = /index.html {
+        if ($request_method !~ ^(?:GET|HEAD)$) { return 405; }
+        include /etc/nginx/numismat/security-headers.conf;
+        add_header Cache-Control "no-store, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        try_files /index.html =404;
+    }
+
+    # A path with a file extension is a file lookup, never a BrowserRouter route.
+    location ~ \.[^/]+$ {
+        if ($request_method !~ ^(?:GET|HEAD)$) { return 405; }
+        include /etc/nginx/numismat/security-headers.conf;
+        add_header Cache-Control "no-store, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        try_files $uri =404;
+    }
+
+    location / {
+        if ($request_method !~ ^(?:GET|HEAD)$) { return 405; }
+        include /etc/nginx/numismat/security-headers.conf;
+        add_header Cache-Control "no-store, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        try_files $uri /index.html;
+    }
+
+    location @asset_not_found {
+        include /etc/nginx/numismat/security-headers.conf;
+        add_header Cache-Control "no-store, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        return 404;
+    }
+
+    location @request_too_large {
+        include /etc/nginx/numismat/security-headers.conf;
+        add_header Cache-Control "no-store, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        default_type application/json;
+        return 413 '{"error":{"code":"request_too_large","message":"Запрос слишком большой"}}';
+    }
+
+    location @bank_import_rate_limited {
+        include /etc/nginx/numismat/security-headers.conf;
+        add_header Cache-Control "no-store, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        default_type application/json;
+        return 429 '{"error":{"code":"rate_limited","message":"Слишком много запросов"}}';
+    }
+
+    location @api_unavailable {
+        include /etc/nginx/numismat/security-headers.conf;
+        add_header Cache-Control "no-store, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        default_type application/json;
+        return 503 '{"error":{"code":"service_unavailable","message":"Сервис временно недоступен"}}';
+    }
+}

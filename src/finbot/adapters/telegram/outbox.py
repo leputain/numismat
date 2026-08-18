@@ -4,20 +4,45 @@ from typing import Any
 
 from aiogram import BaseMiddleware, Bot
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import InlineKeyboardMarkup, Message, TelegramObject
+from aiogram.types import (
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardMarkup,
+    TelegramObject,
+)
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from finbot.adapters.database.models import Draft, TelegramResponseOutbox
-from finbot.adapters.database.services.outbox import lock_pending_responses
+from finbot.adapters.database.models import TelegramResponseOutbox
+from finbot.adapters.database.services.outbox import (
+    bind_telegram_draft_presentation,
+    lock_pending_responses,
+)
+
+type SpecialOutboxDelivery = Callable[[Bot, TelegramResponseOutbox], Awaitable[int | None]]
 
 
-def _reply_markup(response: TelegramResponseOutbox) -> InlineKeyboardMarkup | None:
+def _reply_markup(
+    response: TelegramResponseOutbox,
+) -> InlineKeyboardMarkup | ReplyKeyboardMarkup | None:
     if response.reply_markup is None:
         return None
-    return InlineKeyboardMarkup.model_validate(response.reply_markup)
+    has_inline_keyboard = "inline_keyboard" in response.reply_markup
+    has_reply_keyboard = "keyboard" in response.reply_markup
+    if has_inline_keyboard == has_reply_keyboard:
+        raise RuntimeError("Unsupported Telegram outbox reply markup")
+    if has_inline_keyboard:
+        return InlineKeyboardMarkup.model_validate(response.reply_markup)
+    if response.method != "send_message":
+        raise RuntimeError("Reply keyboards are supported only for sent messages")
+    return ReplyKeyboardMarkup.model_validate(response.reply_markup)
 
 
-async def deliver_response(bot: Bot, response: TelegramResponseOutbox) -> int | None:
+async def deliver_response(
+    bot: Bot,
+    response: TelegramResponseOutbox,
+    *,
+    special_delivery: SpecialOutboxDelivery | None = None,
+) -> int | None:
     """Deliver one validated outbox method.
 
     Delivery is intentionally at-least-once: Telegram has no idempotency key, so a
@@ -26,6 +51,10 @@ async def deliver_response(bot: Bot, response: TelegramResponseOutbox) -> int | 
     introducing duplicates during normal operation.
     """
     markup = _reply_markup(response)
+    if response.method == "send_csv_export":
+        if special_delivery is None:
+            raise RuntimeError("CSV export outbox delivery is not configured")
+        return await special_delivery(bot, response)
     if response.method == "send_message":
         sent = await bot.send_message(
             chat_id=response.chat_id,
@@ -36,6 +65,8 @@ async def deliver_response(bot: Bot, response: TelegramResponseOutbox) -> int | 
         return sent.message_id
     if response.method != "edit_message_text" or response.message_id is None:
         raise RuntimeError("Unsupported or incomplete Telegram outbox response")
+    if isinstance(markup, ReplyKeyboardMarkup):  # pragma: no cover - rejected while decoding
+        raise RuntimeError("Reply keyboards cannot be attached to edited messages")
     try:
         edited = await bot.edit_message_text(
             chat_id=response.chat_id,
@@ -66,6 +97,7 @@ async def deliver_pending_responses(
     update_id: int,
     owner_telegram_user_id: int,
     chat_id: int,
+    special_delivery: SpecialOutboxDelivery | None = None,
 ) -> int:
     delivered = 0
     async with sessions() as session, session.begin():
@@ -76,14 +108,25 @@ async def deliver_pending_responses(
             chat_id=chat_id,
         )
         for response in pending:
-            delivered_message_id = await deliver_response(bot, response)
-            if response.draft_id is not None and delivered_message_id is not None:
-                draft = await session.get(Draft, response.draft_id)
-                if draft is not None:
-                    payload = dict(draft.payload)
-                    payload["ui_message_id"] = delivered_message_id
-                    draft.payload = payload
-                    draft.presentation_ref = str(delivered_message_id)
+            delivered_message_id = await deliver_response(
+                bot,
+                response,
+                special_delivery=special_delivery,
+            )
+            if (
+                response.draft_id is not None
+                and response.draft_revision is not None
+                and delivered_message_id is not None
+            ):
+                await bind_telegram_draft_presentation(
+                    session,
+                    draft_id=response.draft_id,
+                    draft_revision=response.draft_revision,
+                    chat_id=response.chat_id,
+                    message_id=delivered_message_id,
+                    history_page=response.history_page,
+                    pending_history_page=response.pending_history_page,
+                )
             response.sent_at = datetime.now(UTC)
             delivered += 1
     return delivered
@@ -92,8 +135,13 @@ async def deliver_pending_responses(
 class TelegramResponseOutboxMiddleware(BaseMiddleware):
     """Deliver committed receipts before replaying business handlers and after success."""
 
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        special_delivery: SpecialOutboxDelivery | None = None,
+    ) -> None:
         self.sessions = sessions
+        self.special_delivery = special_delivery
 
     async def __call__(
         self,
@@ -118,12 +166,22 @@ class TelegramResponseOutboxMiddleware(BaseMiddleware):
             "owner_telegram_user_id": int(owner.id),
             "chat_id": int(chat.id),
         }
-        if await deliver_pending_responses(self.sessions, bot, **identity):
+        if await deliver_pending_responses(
+            self.sessions,
+            bot,
+            special_delivery=self.special_delivery,
+            **identity,
+        ):
             # A prior invocation committed the business transaction. Replaying the
             # handler would be redundant and, for non-idempotent future handlers,
             # unsafe.
             return None
 
         result = await handler(event, data)
-        await deliver_pending_responses(self.sessions, bot, **identity)
+        await deliver_pending_responses(
+            self.sessions,
+            bot,
+            special_delivery=self.special_delivery,
+            **identity,
+        )
         return result

@@ -5,12 +5,14 @@ from typing import Any, cast
 import pytest
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import EditMessageText, TelegramMethod
 from aiogram.types import File, Message, Update
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import finbot.bootstrap as bootstrap_module
 from finbot.adapters.database.services.onboarding import ensure_owner_user
 from finbot.application.interactions import DraftAction, DraftInteraction
 from finbot.bootstrap import build_dispatcher
@@ -27,6 +29,7 @@ class _TelegramSession(BaseSession):
         super().__init__()
         self.last_message_id = 2000
         self.last_text = ""
+        self.fail_next_edit = False
 
     async def close(self) -> None:
         return None
@@ -47,6 +50,9 @@ class _TelegramSession(BaseSession):
                 file_path="images/ocr.png",
             )
         if method_name in {"SendMessage", "EditMessageText"}:
+            if method_name == "EditMessageText" and self.fail_next_edit:
+                self.fail_next_edit = False
+                raise TelegramBadRequest(method, "message to edit not found")
             self.last_text = str(getattr(method, "text", ""))
             if method_name == "SendMessage":
                 self.last_message_id += 1
@@ -134,6 +140,19 @@ def _callback_update(update_id: int, message_id: int, data: str) -> dict[str, ob
     }
 
 
+def _text_update(update_id: int, text_value: str) -> dict[str, object]:
+    return {
+        "update_id": update_id,
+        "message": {
+            "message_id": 5000 + update_id - UPDATE_ID,
+            "date": 1786093200,
+            "chat": {"id": OWNER_ID, "type": "private"},
+            "from": {"id": OWNER_ID, "is_bot": False, "first_name": "Owner"},
+            "text": text_value,
+        },
+    }
+
+
 async def _cleanup(factory: async_sessionmaker[Any]) -> None:
     database = make_url(DATABASE_URL).database or ""
     if not database.endswith("_test"):
@@ -145,7 +164,7 @@ async def _cleanup(factory: async_sessionmaker[Any]) -> None:
         )
         await session.execute(
             text("DELETE FROM telegram_response_outbox WHERE update_id BETWEEN :first AND :last"),
-            {"first": UPDATE_ID, "last": UPDATE_ID + 20},
+            {"first": UPDATE_ID, "last": UPDATE_ID + 60},
         )
         if user_id is not None:
             await session.execute(
@@ -170,7 +189,7 @@ async def _cleanup(factory: async_sessionmaker[Any]) -> None:
             )
         await session.execute(
             text("DELETE FROM processed_updates WHERE update_id BETWEEN :first AND :last"),
-            {"first": UPDATE_ID, "last": UPDATE_ID + 20},
+            {"first": UPDATE_ID, "last": UPDATE_ID + 60},
         )
         await session.commit()
 
@@ -217,9 +236,10 @@ async def test_photo_creates_review_draft_without_transaction() -> None:
                 {"owner": OWNER_ID},
             )
         assert extractor.calls == 1
-        assert state == "quick_confirm"
+        assert state == "review"
         assert payload["flow"] == "ocr"
-        assert payload["amount"] == 145_000
+        assert payload["amount_minor"] == 145_000
+        assert "amount" not in payload
         assert payload["description"] == "ООО Ромашка"
         assert transaction_count == 0
 
@@ -291,7 +311,8 @@ async def test_ocr_validates_and_renders_actual_default_account_currency() -> No
                 {"owner": OWNER_ID},
             )
         assert payload is not None
-        assert payload["amount"] == 1450
+        assert payload["amount_minor"] == 1450
+        assert "amount" not in payload
         assert payload["currency"] == "USD"
         assert extractor.calls == 1
     finally:
@@ -320,20 +341,22 @@ async def test_ocr_batch_reviews_and_saves_every_operation_sequentially() -> Non
         image_text_extractor=extractor,
     )
 
-    async def current_draft() -> tuple[Any, str, dict[str, object], int, str]:
+    async def current_draft() -> tuple[Any, str, dict[str, object], int, int]:
         async with factory() as session:
             row = (
                 await session.execute(
                     text(
                         "SELECT drafts.id, drafts.state, drafts.payload, drafts.revision, "
-                        "drafts.presentation_ref FROM drafts "
+                        "presentation.message_id AS presentation_message_id FROM drafts "
                         "JOIN users ON users.id = drafts.user_id "
+                        "JOIN telegram_draft_presentations AS presentation "
+                        "ON presentation.draft_id = drafts.id "
                         "WHERE users.telegram_user_id = :owner"
                     ),
                     {"owner": OWNER_ID},
                 )
             ).one()
-        return row.id, row.state, row.payload, row.revision, row.presentation_ref
+            return row.id, row.state, row.payload, row.revision, row.presentation_message_id
 
     try:
         await dispatcher.feed_update(
@@ -341,8 +364,9 @@ async def test_ocr_batch_reviews_and_saves_every_operation_sequentially() -> Non
             Update.model_validate(_photo_update(), context={"bot": bot}),
         )
         first = await current_draft()
-        assert first[1] == "quick_confirm"
-        assert first[2]["amount"] == 25_000
+        assert first[1] == "review"
+        assert first[2]["amount_minor"] == 25_000
+        assert "amount" not in first[2]
         first_batch = cast(dict[str, Any], first[2]["ocr_batch"])
         assert first_batch["version"] == 1
         assert first_batch["index"] == 1
@@ -367,7 +391,9 @@ async def test_ocr_batch_reviews_and_saves_every_operation_sequentially() -> Non
             )
             if step < 2:
                 advanced = await current_draft()
-                assert advanced[2]["amount"] == [200_000, 25_000][step]
+                assert advanced[1] == "review"
+                assert advanced[2]["amount_minor"] == [200_000, 25_000][step]
+                assert "amount" not in advanced[2]
 
         async with factory() as session:
             amounts = list(
@@ -417,20 +443,22 @@ async def test_ocr_batch_replay_stale_and_skip_keep_exactly_confirmed_items() ->
         image_text_extractor=extractor,
     )
 
-    async def current_draft() -> tuple[Any, dict[str, object], int, str]:
+    async def current_draft() -> tuple[Any, dict[str, object], int, int]:
         async with factory() as session:
             row = (
                 await session.execute(
                     text(
                         "SELECT drafts.id, drafts.payload, drafts.revision, "
-                        "drafts.presentation_ref FROM drafts "
+                        "presentation.message_id AS presentation_message_id FROM drafts "
                         "JOIN users ON users.id = drafts.user_id "
+                        "JOIN telegram_draft_presentations AS presentation "
+                        "ON presentation.draft_id = drafts.id "
                         "WHERE users.telegram_user_id = :owner"
                     ),
                     {"owner": OWNER_ID},
                 )
             ).one()
-        return row.id, row.payload, row.revision, row.presentation_ref
+            return row.id, row.payload, row.revision, row.presentation_message_id
 
     async def transaction_amounts() -> list[int]:
         async with factory() as session:
@@ -454,7 +482,8 @@ async def test_ocr_batch_replay_stale_and_skip_keep_exactly_confirmed_items() ->
             Update.model_validate(_photo_update(), context={"bot": bot}),
         )
         first_id, first_payload, first_revision, first_message_ref = await current_draft()
-        assert first_payload["amount"] == 25_000
+        assert first_payload["amount_minor"] == 25_000
+        assert "amount" not in first_payload
         first_confirm = DraftInteraction(
             action=DraftAction.CONFIRM,
             draft_id=first_id,
@@ -471,7 +500,8 @@ async def test_ocr_batch_replay_stale_and_skip_keep_exactly_confirmed_items() ->
             Update.model_validate(confirm_update, context={"bot": bot}),
         )
         second = await current_draft()
-        assert second[1]["amount"] == 50_000
+        assert second[1]["amount_minor"] == 50_000
+        assert "amount" not in second[1]
         assert await transaction_amounts() == [25_000]
 
         await dispatcher.feed_update(
@@ -505,7 +535,8 @@ async def test_ocr_batch_replay_stale_and_skip_keep_exactly_confirmed_items() ->
             ),
         )
         third = await current_draft()
-        assert third[1]["amount"] == 10_000
+        assert third[1]["amount_minor"] == 10_000
+        assert "amount" not in third[1]
         third_batch = cast(dict[str, Any], third[1]["ocr_batch"])
         assert third_batch["saved"] == 1
         assert third_batch["skipped"] == 1
@@ -548,6 +579,433 @@ async def test_ocr_batch_replay_stale_and_skip_keep_exactly_confirmed_items() ->
         assert "Сохранено: <b>1</b>" in final_receipt.text
         assert "Пропущено: <b>2</b>" in final_receipt.text
         assert "Сохранено: <b>1</b>" in telegram.last_text
+    finally:
+        await _cleanup(factory)
+        await bot.session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ocr_advanced_edit_fallback_binds_the_actual_message() -> None:
+    engine = create_async_engine(DATABASE_URL)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    await _cleanup(factory)
+    telegram = _TelegramSession()
+    bot = Bot("123456:synthetic_test_token", session=telegram)
+    dispatcher = build_dispatcher(
+        Settings(
+            telegram_bot_token="123456:synthetic_test_token",
+            owner_telegram_user_id=OWNER_ID,
+            database_url=DATABASE_URL,
+        ),
+        image_text_extractor=_OcrExtractor(
+            "12.08.2026\n10:15 Кофейня -250,00 ₽\n11:20 Метро -100,00 ₽"
+        ),
+    )
+
+    async def current_draft() -> tuple[Any, dict[str, object], int, int, str | None]:
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT drafts.id, drafts.payload, drafts.revision, "
+                        "presentation.message_id AS presentation_message_id, "
+                        "drafts.presentation_ref FROM drafts "
+                        "JOIN users ON users.id = drafts.user_id "
+                        "JOIN telegram_draft_presentations AS presentation "
+                        "ON presentation.draft_id = drafts.id "
+                        "WHERE users.telegram_user_id = :owner"
+                    ),
+                    {"owner": OWNER_ID},
+                )
+            ).one()
+            return (
+                row.id,
+                row.payload,
+                row.revision,
+                row.presentation_message_id,
+                row.presentation_ref,
+            )
+
+    try:
+        await dispatcher.feed_update(
+            bot,
+            Update.model_validate(_photo_update(), context={"bot": bot}),
+        )
+        first = await current_draft()
+        async with factory() as session:
+            await session.execute(
+                text("UPDATE drafts SET presentation_ref = :message_id WHERE id = :draft_id"),
+                {"draft_id": first[0], "message_id": str(first[3])},
+            )
+            await session.commit()
+
+        telegram.fail_next_edit = True
+        confirm = DraftInteraction(
+            DraftAction.CONFIRM,
+            first[0],
+            first[2],
+        ).encode()
+        await dispatcher.feed_update(
+            bot,
+            Update.model_validate(
+                _callback_update(UPDATE_ID + 15, first[3], confirm),
+                context={"bot": bot},
+            ),
+        )
+
+        advanced = await current_draft()
+        assert advanced[1]["amount_minor"] == 10_000
+        assert advanced[3] != first[3]
+        assert advanced[4] == str(first[3])
+        assert advanced[3] == telegram.last_message_id
+
+        skip = DraftInteraction(
+            DraftAction.SKIP_OCR_ITEM,
+            advanced[0],
+            advanced[2],
+        ).encode()
+        await dispatcher.feed_update(
+            bot,
+            Update.model_validate(
+                _callback_update(UPDATE_ID + 16, advanced[3], skip),
+                context={"bot": bot},
+            ),
+        )
+        async with factory() as session:
+            assert (
+                await session.scalar(
+                    text(
+                        "SELECT count(*) FROM drafts JOIN users ON users.id = drafts.user_id "
+                        "WHERE users.telegram_user_id = :owner"
+                    ),
+                    {"owner": OWNER_ID},
+                )
+                == 0
+            )
+    finally:
+        await _cleanup(factory)
+        await bot.session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ocr_cancel_commits_one_terminal_outbox_without_draft_binding() -> None:
+    engine = create_async_engine(DATABASE_URL)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    await _cleanup(factory)
+    telegram = _TelegramSession()
+    bot = Bot("123456:synthetic_test_token", session=telegram)
+    dispatcher = build_dispatcher(
+        Settings(
+            telegram_bot_token="123456:synthetic_test_token",
+            owner_telegram_user_id=OWNER_ID,
+            database_url=DATABASE_URL,
+        ),
+        image_text_extractor=_OcrExtractor(
+            "12.08.2026\n10:15 Кофейня -250,00 ₽\n11:20 Метро -100,00 ₽"
+        ),
+    )
+
+    try:
+        await dispatcher.feed_update(
+            bot,
+            Update.model_validate(_photo_update(), context={"bot": bot}),
+        )
+        async with factory() as session:
+            draft = (
+                await session.execute(
+                    text(
+                        "SELECT drafts.id, drafts.revision, presentation.message_id "
+                        "FROM drafts JOIN users ON users.id = drafts.user_id "
+                        "JOIN telegram_draft_presentations AS presentation "
+                        "ON presentation.draft_id = drafts.id "
+                        "WHERE users.telegram_user_id = :owner"
+                    ),
+                    {"owner": OWNER_ID},
+                )
+            ).one()
+
+        cancel = DraftInteraction(DraftAction.CANCEL, draft.id, draft.revision).encode()
+        await dispatcher.feed_update(
+            bot,
+            Update.model_validate(
+                _callback_update(UPDATE_ID + 17, draft.message_id, cancel),
+                context={"bot": bot},
+            ),
+        )
+
+        async with factory() as session:
+            draft_count = await session.scalar(
+                text(
+                    "SELECT count(*) FROM drafts JOIN users ON users.id = drafts.user_id "
+                    "WHERE users.telegram_user_id = :owner"
+                ),
+                {"owner": OWNER_ID},
+            )
+            transaction_count = await session.scalar(
+                text(
+                    "SELECT count(*) FROM transactions "
+                    "JOIN users ON users.id = transactions.user_id "
+                    "WHERE users.telegram_user_id = :owner"
+                ),
+                {"owner": OWNER_ID},
+            )
+            outbox = (
+                await session.execute(
+                    text(
+                        "SELECT text, draft_id, draft_revision, sent_at "
+                        "FROM telegram_response_outbox WHERE update_id = :update_id"
+                    ),
+                    {"update_id": UPDATE_ID + 17},
+                )
+            ).one()
+        assert draft_count == 0
+        assert transaction_count == 0
+        assert outbox.draft_id is None
+        assert outbox.draft_revision is None
+        assert outbox.sent_at is not None
+        assert "Текущая и оставшиеся операции отменены" in outbox.text
+    finally:
+        await _cleanup(factory)
+        await bot.session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ocr_enqueue_failure_rolls_back_claim_finance_audit_and_advance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_enqueue(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("synthetic enqueue failure")
+
+    monkeypatch.setattr(bootstrap_module, "_enqueue_ocr_queue_receipt", fail_enqueue)
+    engine = create_async_engine(DATABASE_URL)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    await _cleanup(factory)
+    telegram = _TelegramSession()
+    bot = Bot("123456:synthetic_test_token", session=telegram)
+    dispatcher = build_dispatcher(
+        Settings(
+            telegram_bot_token="123456:synthetic_test_token",
+            owner_telegram_user_id=OWNER_ID,
+            database_url=DATABASE_URL,
+        ),
+        image_text_extractor=_OcrExtractor(
+            "12.08.2026\n10:15 Кофейня -250,00 ₽\n11:20 Метро -100,00 ₽"
+        ),
+    )
+
+    try:
+        await dispatcher.feed_update(
+            bot,
+            Update.model_validate(_photo_update(), context={"bot": bot}),
+        )
+        async with factory() as session:
+            before = (
+                await session.execute(
+                    text(
+                        "SELECT drafts.id, drafts.revision, drafts.payload, "
+                        "presentation.message_id "
+                        "FROM drafts JOIN users ON users.id = drafts.user_id "
+                        "JOIN telegram_draft_presentations AS presentation "
+                        "ON presentation.draft_id = drafts.id "
+                        "WHERE users.telegram_user_id = :owner"
+                    ),
+                    {"owner": OWNER_ID},
+                )
+            ).one()
+
+        confirm = DraftInteraction(DraftAction.CONFIRM, before.id, before.revision).encode()
+        with pytest.raises(RuntimeError, match="synthetic enqueue failure"):
+            await dispatcher.feed_update(
+                bot,
+                Update.model_validate(
+                    _callback_update(UPDATE_ID + 18, before.message_id, confirm),
+                    context={"bot": bot},
+                ),
+            )
+
+        async with factory() as session:
+            after = (
+                await session.execute(
+                    text(
+                        "SELECT drafts.id, drafts.revision, drafts.payload FROM drafts "
+                        "JOIN users ON users.id = drafts.user_id "
+                        "WHERE users.telegram_user_id = :owner"
+                    ),
+                    {"owner": OWNER_ID},
+                )
+            ).one()
+            counts = (
+                await session.execute(
+                    text(
+                        "SELECT "
+                        "(SELECT count(*) FROM transactions "
+                        " JOIN users ON users.id = transactions.user_id "
+                        " WHERE users.telegram_user_id = :owner) AS transactions, "
+                        "(SELECT count(*) FROM audit_events "
+                        " JOIN users ON users.id = audit_events.user_id "
+                        " WHERE users.telegram_user_id = :owner) AS audit_events, "
+                        "(SELECT count(*) FROM category_rules "
+                        " JOIN users ON users.id = category_rules.user_id "
+                        " WHERE users.telegram_user_id = :owner) AS category_rules, "
+                        "(SELECT count(*) FROM processed_updates WHERE update_id = :update_id) "
+                        " AS processed_updates, "
+                        "(SELECT count(*) FROM telegram_response_outbox "
+                        " WHERE update_id = :update_id) "
+                        " AS outbox"
+                    ),
+                    {"owner": OWNER_ID, "update_id": UPDATE_ID + 18},
+                )
+            ).one()
+        assert (after.id, after.revision, after.payload) == (
+            before.id,
+            before.revision,
+            before.payload,
+        )
+        assert tuple(counts) == (0, 0, 0, 0, 0)
+    finally:
+        await _cleanup(factory)
+        await bot.session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_advanced_canonical_review_supports_every_review_edit_path() -> None:
+    engine = create_async_engine(DATABASE_URL)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    await _cleanup(factory)
+    telegram = _TelegramSession()
+    bot = Bot("123456:synthetic_test_token", session=telegram)
+    dispatcher = build_dispatcher(
+        Settings(
+            telegram_bot_token="123456:synthetic_test_token",
+            owner_telegram_user_id=OWNER_ID,
+            database_url=DATABASE_URL,
+        ),
+        image_text_extractor=_OcrExtractor(
+            "12.08.2026\n10:15 Кофейня -250,00 ₽\n11:20 Метро -100,00 ₽"
+        ),
+    )
+
+    async def current_draft() -> tuple[Any, str, dict[str, object], int, int]:
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT drafts.id, drafts.state, drafts.payload, drafts.revision, "
+                        "presentation.message_id FROM drafts "
+                        "JOIN users ON users.id = drafts.user_id "
+                        "JOIN telegram_draft_presentations AS presentation "
+                        "ON presentation.draft_id = drafts.id "
+                        "WHERE users.telegram_user_id = :owner"
+                    ),
+                    {"owner": OWNER_ID},
+                )
+            ).one()
+            return row.id, row.state, row.payload, row.revision, row.message_id
+
+    async def click(update_offset: int, action: DraftAction, **kwargs: object) -> None:
+        draft_id, _, _, revision, message_id = await current_draft()
+        interaction = DraftInteraction(
+            action,
+            draft_id,
+            revision,
+            **kwargs,  # type: ignore[arg-type]
+        ).encode()
+        await dispatcher.feed_update(
+            bot,
+            Update.model_validate(
+                _callback_update(UPDATE_ID + update_offset, message_id, interaction),
+                context={"bot": bot},
+            ),
+        )
+
+    try:
+        await dispatcher.feed_update(
+            bot,
+            Update.model_validate(_photo_update(), context={"bot": bot}),
+        )
+        await click(20, DraftAction.CONFIRM)
+        advanced = await current_draft()
+        assert advanced[1] == "review"
+        assert advanced[2]["amount_minor"] == 10_000
+
+        await click(21, DraftAction.EDIT_DESCRIPTION)
+        assert (await current_draft())[1] == "wizard_description"
+        await click(22, DraftAction.BACK)
+        assert (await current_draft())[1] == "review"
+
+        await click(23, DraftAction.RULE_REMOVE)
+        assert (await current_draft())[1] == "review"
+
+        async with factory() as session:
+            catalog = (
+                await session.execute(
+                    text(
+                        "SELECT categories.id AS category_id, "
+                        "categories.version AS category_version, "
+                        "accounts.id AS account_id, accounts.version AS account_version "
+                        "FROM users JOIN categories ON categories.user_id = users.id "
+                        "JOIN accounts ON accounts.user_id = users.id "
+                        "WHERE users.telegram_user_id = :owner "
+                        "AND categories.kind = 'expense' "
+                        "AND categories.archived_at IS NULL "
+                        "AND accounts.archived_at IS NULL "
+                        "ORDER BY categories.name, accounts.name LIMIT 1"
+                    ),
+                    {"owner": OWNER_ID},
+                )
+            ).one()
+
+        await click(24, DraftAction.EDIT_CATEGORY)
+        assert (await current_draft())[1] == "review_category"
+        await click(
+            25,
+            DraftAction.SELECT_CATEGORY,
+            object_id=catalog.category_id,
+            object_version=catalog.category_version,
+        )
+        assert (await current_draft())[1] == "review"
+
+        await click(26, DraftAction.EDIT_ACCOUNT)
+        assert (await current_draft())[1] == "review_account"
+        await click(
+            27,
+            DraftAction.SELECT_ACCOUNT,
+            object_id=catalog.account_id,
+            object_version=catalog.account_version,
+        )
+        assert (await current_draft())[1] == "review"
+
+        await click(28, DraftAction.EDIT_AMOUNT)
+        assert (await current_draft())[1] == "review_amount"
+        await dispatcher.feed_update(
+            bot,
+            Update.model_validate(_text_update(UPDATE_ID + 29, "333"), context={"bot": bot}),
+        )
+        edited = await current_draft()
+        assert edited[1] == "review"
+        assert edited[2]["amount_minor"] == 33_300
+        assert "amount" not in edited[2]
+
+        await click(30, DraftAction.CONFIRM)
+        async with factory() as session:
+            amounts = list(
+                (
+                    await session.scalars(
+                        text(
+                            "SELECT transactions.amount_minor FROM transactions "
+                            "JOIN users ON users.id = transactions.user_id "
+                            "WHERE users.telegram_user_id = :owner "
+                            "ORDER BY transactions.created_at"
+                        ),
+                        {"owner": OWNER_ID},
+                    )
+                ).all()
+            )
+        assert amounts == [25_000, 33_300]
     finally:
         await _cleanup(factory)
         await bot.session.close()

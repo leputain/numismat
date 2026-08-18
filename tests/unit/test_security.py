@@ -5,14 +5,22 @@ from pathlib import Path
 def test_repository_has_no_common_secret_markers() -> None:
     root = Path(__file__).parents[2]
     ignored = {".env.example", "uv.lock"}
+    ignored_directories = {
+        ".agents",
+        ".git",
+        ".hypothesis",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tool-venv",
+        ".venv",
+        "__pycache__",
+        "dist",
+        "htmlcov",
+        "node_modules",
+    }
     for path in root.rglob("*"):
-        if (
-            not path.is_file()
-            or ".venv" in path.parts
-            or ".tool-venv" in path.parts
-            or "__pycache__" in path.parts
-            or ".git" in path.parts
-        ):
+        if not path.is_file() or not ignored_directories.isdisjoint(path.parts):
             continue
         if path.name in ignored:
             continue

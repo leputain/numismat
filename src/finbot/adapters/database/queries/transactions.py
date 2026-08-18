@@ -1,11 +1,12 @@
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
 from finbot.adapters.database.models import Account, Category, Transaction
+from finbot.application.dto import DeletedTransactionCursor, TransactionCursor
 from finbot.application.queries.transactions import TransactionDetails
 
 DetailRow = Row[tuple[Transaction, str, str, str]]
@@ -68,11 +69,73 @@ async def list_transaction_details(
     query = _base_query(user_id)
     rows = await session.execute(
         query.where(Transaction.deleted_at.is_(None))
-        .order_by(Transaction.occurred_at.desc(), Transaction.created_at.desc())
+        .order_by(
+            Transaction.occurred_at.desc(),
+            Transaction.created_at.desc(),
+            Transaction.id.desc(),
+        )
         .offset(max(page, 0) * page_size)
         .limit(page_size)
     )
     return [_details(row) for row in rows.all()], total
+
+
+async def list_transaction_details_after(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    cursor: TransactionCursor | None,
+    limit: int,
+) -> list[TransactionDetails]:
+    if type(limit) is not int or not 1 <= limit <= 101:
+        raise ValueError("Cursor query limit must be between 1 and 101")
+    query = _base_query(user_id).where(Transaction.deleted_at.is_(None))
+    if cursor is not None:
+        query = query.where(
+            or_(
+                Transaction.occurred_at < cursor.occurred_at,
+                and_(
+                    Transaction.occurred_at == cursor.occurred_at,
+                    Transaction.id < cursor.transaction_id,
+                ),
+            )
+        )
+    rows = await session.execute(
+        query.order_by(
+            Transaction.occurred_at.desc(),
+            Transaction.id.desc(),
+        ).limit(limit)
+    )
+    return [_details(row) for row in rows.all()]
+
+
+async def list_deleted_transaction_details_after(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    cursor: DeletedTransactionCursor | None,
+    limit: int,
+) -> list[TransactionDetails]:
+    if type(limit) is not int or not 1 <= limit <= 101:
+        raise ValueError("Deleted cursor query limit must be between 1 and 101")
+    query = _base_query(user_id).where(Transaction.deleted_at.is_not(None))
+    if cursor is not None:
+        query = query.where(
+            or_(
+                Transaction.deleted_at < cursor.deleted_at,
+                and_(
+                    Transaction.deleted_at == cursor.deleted_at,
+                    Transaction.id < cursor.transaction_id,
+                ),
+            )
+        )
+    rows = await session.execute(
+        query.order_by(
+            Transaction.deleted_at.desc(),
+            Transaction.id.desc(),
+        ).limit(limit)
+    )
+    return [_details(row) for row in rows.all()]
 
 
 async def list_deleted_transaction_details(
@@ -93,7 +156,11 @@ async def list_deleted_transaction_details(
     query = _base_query(user_id)
     rows = await session.execute(
         query.where(Transaction.deleted_at.is_not(None))
-        .order_by(Transaction.deleted_at.desc(), Transaction.updated_at.desc())
+        .order_by(
+            Transaction.deleted_at.desc(),
+            Transaction.updated_at.desc(),
+            Transaction.id.desc(),
+        )
         .offset(max(page, 0) * page_size)
         .limit(page_size)
     )
@@ -103,9 +170,16 @@ async def list_deleted_transaction_details(
 async def export_transaction_details(
     session: AsyncSession,
     user_id: UUID,
+    *,
+    limit: int | None = None,
 ) -> list[TransactionDetails]:
+    if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
+        raise ValueError("Export limit must be positive")
     query = _base_query(user_id)
-    rows = await session.execute(
-        query.where(Transaction.deleted_at.is_(None)).order_by(Transaction.occurred_at)
+    query = query.where(Transaction.deleted_at.is_(None)).order_by(
+        Transaction.occurred_at, Transaction.created_at, Transaction.id
     )
+    if limit is not None:
+        query = query.limit(limit)
+    rows = await session.execute(query)
     return [_details(row) for row in rows.all()]

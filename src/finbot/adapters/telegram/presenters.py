@@ -4,6 +4,7 @@ from math import ceil
 from zoneinfo import ZoneInfo
 
 from finbot import VERSION_LABEL
+from finbot.application.dto import TransactionSnapshot
 from finbot.application.queries.reports import CategoryTotal, ReportTransaction
 from finbot.application.queries.transactions import TransactionDetails
 
@@ -63,8 +64,43 @@ def transaction_card(item: TransactionDetails, timezone: str, *, title: str = "�
     )
 
 
+def transaction_details_from_snapshot(item: TransactionSnapshot) -> TransactionDetails:
+    """Map a command result into the existing channel-neutral card projection."""
+
+    return TransactionDetails(
+        id=item.transaction_id,
+        type=item.kind.value,
+        amount_minor=item.amount_minor,
+        currency=item.currency,
+        account_id=item.account_id,
+        account_name=item.account_name,
+        category_id=item.category_id,
+        category_name=item.category_name,
+        category_emoji=item.category_emoji,
+        occurred_at=item.occurred_at,
+        description=item.description,
+        source=item.source,
+        deleted_at=item.deleted_at,
+        version=item.version,
+    )
+
+
+def transaction_snapshot_card(
+    item: TransactionSnapshot,
+    timezone: str,
+    *,
+    title: str = "Операция",
+) -> str:
+    """Render an application command snapshot without another database read."""
+
+    return transaction_card(transaction_details_from_snapshot(item), timezone, title=title)
+
+
 def wizard_summary(payload: dict[str, object], currency: str, timezone: str) -> str:
     kind = str(payload["type"])
+    amount = payload.get("amount_minor", payload.get("amount"))
+    if amount is None:
+        raise ValueError("Draft amount is missing")
     occurred_at = datetime.fromisoformat(str(payload["occurred_at"]))
     description = str(payload.get("description", "")).strip()
     description_line = f"\n📝 {escape(description)}" if description else ""
@@ -75,7 +111,7 @@ def wizard_summary(payload: dict[str, object], currency: str, timezone: str) -> 
     )
     return (
         "<b>Новая операция · проверьте</b>\n\n"
-        f"<b>{money(int(str(payload['amount'])), currency, sign=operation_sign(kind))}</b>\n"
+        f"<b>{money(int(str(amount)), currency, sign=operation_sign(kind))}</b>\n"
         f"🏷 {escape(str(payload['category_name']))}\n"
         f"💳 {escape(str(payload['account_name']))}\n"
         f"🕒 {local_date(occurred_at, timezone)}"
@@ -195,6 +231,8 @@ HELP_TEXT = f"""<b>Как пользоваться Numismat · {VERSION_LABEL}</
 
 <b>Полезные действия</b>
 • <b>Сегодня</b> и <b>Месяц</b> — отчёты и категории расходов.
+• <b>Регулярные</b> — ближайшие расписания; каждая операция всё равно требует проверки.
+• <b>Курсы</b> — опубликованные версии и безопасная ссылка на управление в Mini App.
 • <b>Все операции</b> — просмотр, полное редактирование и удаление.
 • <b>Отменить действие</b> — отменяет последнее создание, изменение, удаление или восстановление.
 • <b>Экспорт</b> — CSV в UTF-8 для Excel и таблиц.

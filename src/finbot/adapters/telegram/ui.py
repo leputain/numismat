@@ -9,7 +9,10 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from finbot.application.interactions import DraftAction, DraftInteraction
+from finbot.application.interactions import MAX_PAGE, DraftAction, DraftInteraction
+
+_TX_DATE_CHOICE_COUNT = 3
+MAX_TX_HISTORY_PAGE = MAX_PAGE // _TX_DATE_CHOICE_COUNT
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,13 +29,14 @@ def _draft_callback(
     revision: int | None,
     *,
     object_version: int = 1,
+    callback_page: int | None = None,
 ) -> str:
     if draft_id is None and revision is None:
         return legacy
     if draft_id is None or revision is None:
         raise ValueError("draft_id and revision must be provided together")
     action: DraftAction
-    page: int | None = None
+    page: int | None = callback_page
     object_id: UUID | None = None
     version: int | None = None
     direct = {
@@ -93,7 +97,16 @@ def _draft_callback(
         version = object_version
     elif legacy.startswith("e:datepick:"):
         action = DraftAction.TX_SELECT_DATE
-        page = {"today": 0, "yesterday": 1, "custom": 2}[legacy.removeprefix("e:datepick:")]
+        choice_page = {
+            "today": 0,
+            "yesterday": 1,
+            "custom": 2,
+        }[legacy.removeprefix("e:datepick:")]
+        page = (
+            callback_page * _TX_DATE_CHOICE_COUNT + choice_page
+            if callback_page is not None
+            else choice_page
+        )
     else:
         raise ValueError(f"unsupported draft callback: {legacy}")
     return DraftInteraction(
@@ -110,6 +123,8 @@ MAIN_MENU = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➕ Добавить операцию")],
         [KeyboardButton(text="📅 Сегодня"), KeyboardButton(text="📊 Месяц")],
+        [KeyboardButton(text="🎯 Бюджеты"), KeyboardButton(text="🔁 Регулярные")],
+        [KeyboardButton(text="💱 Курсы")],
         [KeyboardButton(text="🧾 Все операции"), KeyboardButton(text="↩️ Отменить")],
         [KeyboardButton(text="📤 CSV"), KeyboardButton(text="⚙️ Настройки")],
         [KeyboardButton(text="❓ Помощь")],
@@ -122,6 +137,13 @@ MAIN_MENU = ReplyKeyboardMarkup(
 
 def _rows(buttons: list[InlineKeyboardButton], width: int = 2) -> list[list[InlineKeyboardButton]]:
     return [buttons[index : index + width] for index in range(0, len(buttons), width)]
+
+
+def _validate_tx_history_page(history_page: int) -> None:
+    if isinstance(history_page, bool) or not isinstance(history_page, int):
+        raise TypeError("history_page must be an integer")
+    if not 0 <= history_page <= MAX_TX_HISTORY_PAGE:
+        raise ValueError("history_page is outside the versioned edit callback range")
 
 
 def wizard_input_keyboard(
@@ -145,16 +167,23 @@ def wizard_input_keyboard(
 def edit_input_keyboard(
     *,
     date_menu: bool = False,
+    history_page: int = 0,
     draft_id: UUID | None = None,
     revision: int | None = None,
 ) -> InlineKeyboardMarkup:
+    _validate_tx_history_page(history_page)
     callback_data = "e:dateback" if date_menu else "e:back"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="⬅️ Назад",
-                    callback_data=_draft_callback(callback_data, draft_id, revision),
+                    callback_data=_draft_callback(
+                        callback_data,
+                        draft_id,
+                        revision,
+                        callback_page=history_page,
+                    ),
                 )
             ]
         ]
@@ -254,9 +283,13 @@ def category_keyboard(
     categories: list[Choice],
     *,
     edit: bool = False,
+    allow_custom: bool = True,
+    history_page: int = 0,
     draft_id: UUID | None = None,
     revision: int | None = None,
 ) -> InlineKeyboardMarkup:
+    if edit:
+        _validate_tx_history_page(history_page)
     buttons = [
         InlineKeyboardButton(
             text=f"{choice.emoji or '▫️'} {choice.label}",
@@ -266,6 +299,7 @@ def category_keyboard(
                     draft_id,
                     revision,
                     object_version=choice.version,
+                    callback_page=history_page,
                 )
                 if edit
                 else _draft_callback(
@@ -280,14 +314,15 @@ def category_keyboard(
     ]
     rows = _rows(buttons)
     if not edit:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="＋ Своя категория",
-                    callback_data=_draft_callback("w:cat:new", draft_id, revision),
-                )
-            ]
-        )
+        if allow_custom:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="＋ Своя категория",
+                        callback_data=_draft_callback("w:cat:new", draft_id, revision),
+                    )
+                ]
+            )
         rows.append(
             [
                 InlineKeyboardButton(
@@ -304,7 +339,12 @@ def category_keyboard(
             [
                 InlineKeyboardButton(
                     text="⬅️ Назад",
-                    callback_data=_draft_callback("e:back", draft_id, revision),
+                    callback_data=_draft_callback(
+                        "e:back",
+                        draft_id,
+                        revision,
+                        callback_page=history_page,
+                    ),
                 )
             ]
         )
@@ -315,9 +355,12 @@ def account_keyboard(
     accounts: list[Choice],
     *,
     edit: bool = False,
+    history_page: int = 0,
     draft_id: UUID | None = None,
     revision: int | None = None,
 ) -> InlineKeyboardMarkup:
+    if edit:
+        _validate_tx_history_page(history_page)
     rows = _rows(
         [
             InlineKeyboardButton(
@@ -328,6 +371,7 @@ def account_keyboard(
                         draft_id,
                         revision,
                         object_version=choice.version,
+                        callback_page=history_page,
                     )
                     if edit
                     else _draft_callback(
@@ -366,7 +410,12 @@ def account_keyboard(
             [
                 InlineKeyboardButton(
                     text="⬅️ Назад",
-                    callback_data=_draft_callback("e:back", draft_id, revision),
+                    callback_data=_draft_callback(
+                        "e:back",
+                        draft_id,
+                        revision,
+                        callback_page=history_page,
+                    ),
                 )
             ]
         )
@@ -416,6 +465,7 @@ def wizard_confirm_keyboard(
     revision: int | None = None,
     ocr_batch: bool = False,
     ocr_has_more: bool = False,
+    restricted_import: bool = False,
 ) -> InlineKeyboardMarkup:
     description = "✏️ Изменить комментарий" if has_description else "✏️ Добавить комментарий"
     rule_rows: list[list[InlineKeyboardButton]] = []
@@ -444,27 +494,23 @@ def wizard_confirm_keyboard(
                     )
                 ]
             ]
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    if restricted_import:
+        rule_rows = []
+    edit_rows = (
+        [
             [
                 InlineKeyboardButton(
-                    text="✅ Сохранить и дальше" if ocr_has_more else "✅ Сохранить",
-                    callback_data=_draft_callback("w:confirm", draft_id, revision),
-                )
-            ],
-            *(
-                [
-                    [
-                        InlineKeyboardButton(
-                            text="⏭ Пропустить эту операцию",
-                            callback_data=_draft_callback("w:ocr:skip", draft_id, revision),
-                        )
-                    ]
-                ]
-                if ocr_batch
-                else []
-            ),
-            *rule_rows,
+                    text="🏷 Категория",
+                    callback_data=_draft_callback("w:review:category", draft_id, revision),
+                ),
+                InlineKeyboardButton(
+                    text=description,
+                    callback_data=_draft_callback("w:description", draft_id, revision),
+                ),
+            ]
+        ]
+        if restricted_import
+        else [
             [
                 InlineKeyboardButton(
                     text="↔️ Тип",
@@ -495,6 +541,30 @@ def wizard_confirm_keyboard(
                     callback_data=_draft_callback("w:description", draft_id, revision),
                 ),
             ],
+        ]
+    )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Сохранить и дальше" if ocr_has_more else "✅ Сохранить",
+                    callback_data=_draft_callback("w:confirm", draft_id, revision),
+                )
+            ],
+            *(
+                [
+                    [
+                        InlineKeyboardButton(
+                            text="⏭ Пропустить эту операцию",
+                            callback_data=_draft_callback("w:ocr:skip", draft_id, revision),
+                        )
+                    ]
+                ]
+                if ocr_batch
+                else []
+            ),
+            *rule_rows,
+            *edit_rows,
             [
                 InlineKeyboardButton(
                     text="⬅️ Назад", callback_data=_draft_callback("w:back", draft_id, revision)
@@ -661,32 +731,58 @@ def edit_keyboard(
     draft_id: UUID | None = None,
     revision: int | None = None,
 ) -> InlineKeyboardMarkup:
+    _validate_tx_history_page(history_page)
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="💰 Сумма",
-                    callback_data=_draft_callback("e:amount", draft_id, revision),
+                    callback_data=_draft_callback(
+                        "e:amount",
+                        draft_id,
+                        revision,
+                        callback_page=history_page,
+                    ),
                 ),
                 InlineKeyboardButton(
                     text="🏷 Категория",
-                    callback_data=_draft_callback("e:category", draft_id, revision),
+                    callback_data=_draft_callback(
+                        "e:category",
+                        draft_id,
+                        revision,
+                        callback_page=history_page,
+                    ),
                 ),
             ],
             [
                 InlineKeyboardButton(
                     text="💳 Счёт",
-                    callback_data=_draft_callback("e:account", draft_id, revision),
+                    callback_data=_draft_callback(
+                        "e:account",
+                        draft_id,
+                        revision,
+                        callback_page=history_page,
+                    ),
                 ),
                 InlineKeyboardButton(
                     text="📆 Дата",
-                    callback_data=_draft_callback("e:date", draft_id, revision),
+                    callback_data=_draft_callback(
+                        "e:date",
+                        draft_id,
+                        revision,
+                        callback_page=history_page,
+                    ),
                 ),
             ],
             [
                 InlineKeyboardButton(
                     text="📝 Комментарий",
-                    callback_data=_draft_callback("e:description", draft_id, revision),
+                    callback_data=_draft_callback(
+                        "e:description",
+                        draft_id,
+                        revision,
+                        callback_page=history_page,
+                    ),
                 )
             ],
             [
@@ -707,28 +803,49 @@ def edit_date_keyboard(
     draft_id: UUID | None = None,
     revision: int | None = None,
 ) -> InlineKeyboardMarkup:
+    _validate_tx_history_page(history_page)
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="Сегодня",
-                    callback_data=_draft_callback("e:datepick:today", draft_id, revision),
+                    callback_data=_draft_callback(
+                        "e:datepick:today",
+                        draft_id,
+                        revision,
+                        callback_page=history_page,
+                    ),
                 ),
                 InlineKeyboardButton(
                     text="Вчера",
-                    callback_data=_draft_callback("e:datepick:yesterday", draft_id, revision),
+                    callback_data=_draft_callback(
+                        "e:datepick:yesterday",
+                        draft_id,
+                        revision,
+                        callback_page=history_page,
+                    ),
                 ),
             ],
             [
                 InlineKeyboardButton(
                     text="📆 Ввести дату",
-                    callback_data=_draft_callback("e:datepick:custom", draft_id, revision),
+                    callback_data=_draft_callback(
+                        "e:datepick:custom",
+                        draft_id,
+                        revision,
+                        callback_page=history_page,
+                    ),
                 )
             ],
             [
                 InlineKeyboardButton(
                     text="⬅️ Назад",
-                    callback_data=_draft_callback("e:back", draft_id, revision),
+                    callback_data=_draft_callback(
+                        "e:back",
+                        draft_id,
+                        revision,
+                        callback_page=history_page,
+                    ),
                 )
             ],
         ]

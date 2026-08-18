@@ -15,7 +15,7 @@ from __future__ import annotations
 import base64
 import binascii
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from uuid import UUID
 
@@ -174,12 +174,12 @@ def decode_base36(value: str) -> int:
 class DraftInteraction:
     """Version-bound action produced by a transaction-draft screen."""
 
-    action: DraftAction
-    draft_id: UUID
-    revision: int
-    page: int | None = None
-    object_id: UUID | None = None
-    object_version: int | None = None
+    action: DraftAction = field(repr=False)
+    draft_id: UUID = field(repr=False)
+    revision: int = field(repr=False)
+    page: int | None = field(default=None, repr=False)
+    object_id: UUID | None = field(default=None, repr=False)
+    object_version: int | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.action, DraftAction):

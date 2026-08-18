@@ -2,9 +2,9 @@
 
 ## Product
 
-Finbot — русскоязычный single-owner Telegram-бот для личного учёта доходов и расходов. Он работает одним процессом
-через long polling, использует PostgreSQL как единственный источник истины и обслуживает только configured numeric
-owner ID в личном чате.
+Finbot — русскоязычный single-owner сервис личного учёта доходов и расходов. Telegram adapter работает отдельным
+long-polling процессом, а owner-only FastAPI adapter — отдельным ASGI process над тем же application API и PostgreSQL.
+Оба контура обслуживают только configured numeric owner; Telegram дополнительно требует личный чат.
 
 Defaults: `ru_RU`, `RUB`, `Europe/Moscow`, счёт `Основная карта`. В настройках доступны основной счёт, timezone и
 управление справочниками. Режима сохранения без проверки нет: legacy-колонка `fast_mode`, пока она существует для
@@ -38,8 +38,52 @@ Wizard сохраняет каждый шаг в PostgreSQL и предоста�
 очередь, но не строки транзакций. Каждая операция, включая последнюю, показывается в review и требует отдельного «Сохранить» или «Пропустить»;
 массового сохранения нет. Отмена удаляет текущую и оставшуюся очередь, но не удаляет уже сохранённые операции. Исходное изображение и сырой OCR-текст не сохраняются.
 
+### Банковский CSV-импорт и сверка
+
+Mini App принимает raw CSV до 2 MiB, 2000 строк, 32 колонок и 500 символов в поле. V1
+требует точный canonical header/profile и явный UTF-8/BOM или Windows-1251; угадывания encoding нет.
+Сумма разбирается сразу в integer minor units без `float`. Все строки одного batch обязаны иметь
+один normalized bank account reference и валюту выбранного local account; любое нарушение отклоняет
+batch целиком. Telegram document ingress использует только UTF-8 и server-authoritative default active account;
+другой счёт или encoding выбираются в Mini App.
+
+Загрузка создаёт owner/account-scoped batch и normalized staged rows, но не transactions. Для каждой
+строки показывается не более пяти exact owner/account/type/amount/currency candidates в окне ±3 дня со
+стабильным рангом. Владелец явно выбирает: создать restricted shared review draft, связать одну
+существующую transaction или пропустить. Auto-match, auto-create и bulk confirm запрещены. В import review
+разрешены только категория, комментарий, confirm/cancel/back; type, amount, account, date, OCR/rule
+и hidden-intent paths fail closed. Отмена batch не откатывает уже confirmed/linked rows.
+
 «Повторить сегодня» копирует тип, сумму, категорию, счёт и комментарий существующей операции, заменяет дату текущим
 локальным временем владельца и создаёт новый review draft. Исходная операция не изменяется.
+
+### Регулярные операции
+
+Расписание задаёт daily/weekly/monthly cadence с bounded interval, локальные дату/время, необязательную дату
+окончания и неизменяемый snapshot timezone владельца. Месячный recurrence clamp-ит день к концу месяца; ambiguous
+DST выбирает первый fold, gap сдвигается к первому существующему локальному времени. Каждая due-точка имеет
+уникальный `(schedule, occurrence_index)` instance. DB-only runner работает двумя короткими транзакционными фазами,
+использует advisory locks и bounded batches, берёт owner lock до staging и допускает максимум 32 unstaged pending
+instances на владельца.
+
+Runner никогда не создаёт transaction: он создаёт обычный `review` draft с `flow=recurring`. Если любой active draft
+уже существует, instance остаётся pending и получает bounded backoff — hidden intent, suspend, replace и auto-confirm
+запрещены. Confirm связывает новую transaction с instance и `source=recurring`; cancel удаляет draft, а instance
+показывается как dismissed. Telegram даёт bounded список/detail и owner-only Mini App link; Mini App предоставляет
+CRUD, pause/resume/delete/restore и bounded instance history с skip/retry.
+
+### Опциональное AI-предложение
+
+`/ai <text>` — единственный local-AI ingress. При `LOCAL_AI_ENABLED=false` команда отвечает фиксированным отказом и
+не выполняет network call; обычный text input и OCR не меняют поведение. Enabled adapter принимает только exact
+local Ollama endpoint, bounded prompt/response и strict structured output. Amount обязан быть decimal string и
+разбирается в integer minor units без `float`; дополнительные/неверные поля отклоняют предложение целиком.
+
+Provider вызывается до DB mutation UoW. После валидации suggestion проходит общий account/category resolution и
+создаёт `flow=local_ai` draft в `review`, `category_required` или `account_required`. Transaction напрямую не
+создаётся. Любой active draft даёт durable fixed conflict receipt без изменения draft payload/revision/suspended
+state и без hidden `pending_intent`. V1 не интерпретирует transaction date: date words остаются в description для
+явной проверки владельцем.
 
 ## Категоризация и explicit learning
 
@@ -85,9 +129,54 @@ CSV содержит все активные операции и колонки:
 описание. Формат: UTF-8 BOM, `;`, decimal comma. Money форматируется целочисленно. Текстовые ячейки, начинающиеся после
 пробелов с `=`, `+`, `-` или `@`, экранируются от spreadsheet formula injection.
 
+## HTTP API backend
+
+Versioned `/api/v1` использует проверенный Telegram Mini App `initData` только для выдачи одночасовой opaque
+cookie-session exact configured owner. HMAC проверяется до разбора identity; signed proof нельзя повторить. Protected
+mutation требует exact HTTPS Origin, host-only session cookie, double-submit CSRF и canonical owner-wide
+`Idempotency-Key`. Session lock, owner lock, idempotency claim, domain write и completion принадлежат одной транзакции.
+
+Read API содержит dashboard, today/period/comparison reports, active transaction keyset list, owner-scoped detail и
+complete-but-bounded accounts/categories. Minor units передаются decimal strings. Multi-query reads используют один
+`READ ONLY REPEATABLE READ` snapshot; collection overflow завершается fail closed, а не silent truncation.
+
+Recurring HTTP API использует тот же auth/CSRF/idempotency UoW. Списки schedules/instances ограничены 50 элементами,
+а cursors подписаны, owner/filter-bound и opaque. Schedule create/replace/lifecycle возвращает retained minimal
+`recurring_schedule` receipt, instance skip/retry — `recurring_instance`; raw schedule payload не логируется.
+
+Exchange-rate HTTP API возвращает не более 32 owner-scoped ручных источников и пагинированные неизменяемые версии.
+Публикация требует optimistic `expected_source_version` и возвращает retained minimal `exchange_rate_version`
+receipt. Пересчёт периода принимает точный `version_id`; выбор latest на сервере запрещён, исходные transactions не
+изменяются. Поддерживаются только явно заданные прямые курсы, без inverse и triangulation.
+
+Draft/transaction writes используют только closed typed review-first actions. HTTP не предоставляет direct transaction
+create и не принимает raw draft payload. Same-key replay строится из сохранённого minimal result без повторного чтения
+изменившейся domain entity. Catalog writes требуют optimistic version и сохраняют active/archive cap под owner lock,
+включая cross-channel custom input.
+
+FastAPI `app.openapi()` является единственным backend contract source. Offline exporter собирает self-contained
+canonical JSON без environment, secrets, database или network access; Swagger/ReDoc CDN UI отключены.
+
+## Telegram Mini App UI и запуск
+
+React Mini App использует только same-origin `/api/v1`: raw Telegram `initData` передаётся ровно один раз в auth POST
+и не попадает в storage, URL или telemetry. После cookie bootstrap доступны dashboard, today/month summary, active
+transaction history/detail, trash и единый persistent draft review/create/edit/repeat flow. Любая новая transaction
+по-прежнему появляется только через явный confirm; Telegram и HTTP разделяют один draft UUID/revision.
+
+Launch button устанавливается Bot API только для exact numeric owner private chat. Default menu не открывает Web App,
+а глобальный BotFather Main Mini App запрещён и останавливает startup. Если владелец ещё не открыл bot chat, установка
+лениво повторяется на `/start` или `/menu`. Telegram mobile reconnect повторяет mutation только с тем же
+`Idempotency-Key`; unknown outcome не создаёт второй draft/transaction.
+
+Production edge принимает единственный HTTPS DNS Host, отдаёт source-map-free SPA и immutable hashed assets,
+проксирует `/api/*` и health к internal API без retry/forwarded identity и возвращает fixed error envelope. HTML и SPA
+не кешируются. CSP/permissions policy запрещают лишние origins и capabilities; native Telegram mobile/desktop WebView
+поддержан, iframe embedding и Telegram Web намеренно fail closed запрещены.
+
 ## Commands
 
-Поддерживаются `/start`, `/help`, `/menu`, `/wizard`, `/today`, `/month`, `/last`, `/undo`, `/export`, `/settings` и
+Поддерживаются `/start`, `/help`, `/menu`, `/wizard`, `/today`, `/month`, `/last`, `/recurring`, `/rates`, `/undo`, `/export`, `/settings` и
 постоянная reply keyboard. В BotFather command menu может быть пустым; ручные slash-команды продолжают работать.
 
 ## Data invariants
@@ -96,6 +185,10 @@ PostgreSQL — единственный source of truth. UUIDv7 идентифи
 валюта — uppercase 3-character code; timezone-aware timestamps сохраняются в UTC. Для money запрещены `float` и
 scientific notation; `Decimal` допустим только на input boundary.
 
+Версия курса хранит положительные integer `coefficient` и `scale <= 12`, каноническую ASCII-десятичную строку и
+двухзнаковую minor-unit модель. Конвертация агрегата выполняется целочисленно с HALF_EVEN; опубликованные версии и
+entries не редактируются и не удаляются application flow.
+
 Archived account/category нельзя назначить новой операции; category kind обязан совпадать с transaction kind.
 Исторические foreign keys сохраняются. Optimistic versions предотвращают lost updates. Partial unique indexes
 обеспечивают idempotent transaction creation по Telegram update и уникальность normalized learned rules в scope.
@@ -103,14 +196,16 @@ Archived account/category нельзя назначить новой опера�
 receipt и не повторяет business handler. Доставка receipt at-least-once, поскольку Telegram API не предоставляет
 idempotency key.
 
-Persistent tables: users, accounts, categories, transactions, drafts, category rules, processed updates, audit events
-и typed Telegram response outbox. Raw Telegram updates после обработки не сохраняются.
+Persistent tables: users, accounts, categories, transactions, channel-neutral drafts, Telegram presentation,
+category rules, recurring schedules/instances, processed updates, audit events, typed Telegram response outbox,
+bounded web sessions и HTTP
+idempotency records. Raw Telegram updates после обработки не сохраняются.
 
 ## Layers
 
-`domain` и `application` не импортируют aiogram, SQLAlchemy или `finbot.adapters`. Application объявляет DTO/ports и
-политики; PostgreSQL и Telegram реализуют adapters. Telegram handlers остаются thin и не владеют domain invariants,
-SQLAlchemy queries или транзакционными правилами.
+`domain` и `application` не импортируют aiogram, FastAPI/Pydantic HTTP, SQLAlchemy или `finbot.adapters`. Application
+объявляет DTO/ports и политики; PostgreSQL, Telegram и HTTP реализуют adapters. Telegram/HTTP routers остаются thin и
+не владеют domain invariants, SQLAlchemy queries или транзакционными правилами.
 
 ## Reliability, privacy and operations
 
@@ -122,8 +217,9 @@ JSON logs являются allowlist API: разрешены только без
 exception text, traceback, SQL, Telegram IDs/payloads, суммы, описания, категории, account names, token, credentials и
 URLs не сериализуются.
 
-Production работает non-root с read-only rootfs, tmpfs, dropped capabilities, no-new-privileges, без Docker socket и
-без published PostgreSQL port. Runtime и migrations используют разные database credentials.
+Production bot, API и web edge работают отдельными non-root containers с read-only rootfs, tmpfs, dropped
+capabilities, no-new-privileges, без Docker socket и без published PostgreSQL port. API публикуется только во
+внутреннюю `api-edge`; host TCP/443 принадлежит web edge. Runtime и migrations используют разные database credentials.
 
 Integration tests всегда запускаются в отдельном Compose окружении и в реально подключённой БД с suffix `_test`;
 отсутствующий `TEST_DATABASE_URL`, неверное имя или любой skipped integration test являются ошибкой.
@@ -134,11 +230,16 @@ snapshot, retention, freshness и repository check. Restore drill допуска
 
 ## Fixed stack
 
-CPython 3.14.7, uv 0.12.2, aiogram 3.30.0, Pydantic 2.13.4, pydantic-settings 2.14.2, SQLAlchemy 2.0.51, Alembic
-1.19.0, Psycopg 3.3.4 и PostgreSQL 18.4. Используется один frozen resolver/lockfile; pre-release dependencies и
-параллельные Python package managers запрещены.
+CPython 3.14.7, uv 0.12.2, aiogram 3.30.0, FastAPI 0.141.1, Uvicorn 0.52.3, Pydantic 2.13.4,
+pydantic-settings 2.14.2, SQLAlchemy 2.0.51, Alembic 1.19.0, Psycopg 3.3.4 и PostgreSQL 18.4. Используется один frozen
+Python resolver/lockfile; pre-release dependencies и параллельные Python package managers запрещены.
+
+Frontend foundation: Node 22.22.2, npm 10.9.7, React/React DOM 19.2.8, React Router 8.3.0, Vite 8.2.1,
+TypeScript 5.9.3, Tailwind CSS 4.3.3, TanStack Query 5.101.4 и Vitest 4.1.10. Все версии exact-pinned в npm
+lockfile; generated API types обязаны совпадать с canonical offline OpenAPI, production source maps запрещены.
 
 ## Non-goals
 
-Нет AI parser/OpenAI API, voice, прямой банковской/API-интеграции, инвестиций, семейного доступа, Mini App, FastAPI, Redis, Celery, Kafka, Prometheus, OpenTelemetry
-Collector или Sentry. OCR намеренно является локальным и детерминированным.
+Нет external AI parser/OpenAI API, voice, прямой банковской/API-интеграции, инвестиций, семейного доступа, Redis,
+Celery, Kafka, Prometheus, OpenTelemetry Collector или Sentry. Telegram Web iframe не входит в M3; OCR намеренно
+является локальным и детерминированным. Optional Ollama не является fallback и доступен только через явную `/ai`.

@@ -27,9 +27,14 @@ async def totals(
 
 
 async def totals_by_currency(
-    session: AsyncSession, user_id: UUID, start: datetime, end: datetime
+    session: AsyncSession,
+    user_id: UUID,
+    start: datetime,
+    end: datetime,
+    *,
+    currency_limit: int | None = None,
 ) -> dict[str, dict[str, int]]:
-    rows = await session.execute(
+    statement = (
         select(Transaction.currency, Transaction.type, func.sum(Transaction.amount_minor))
         .where(
             Transaction.user_id == user_id,
@@ -38,7 +43,13 @@ async def totals_by_currency(
             Transaction.deleted_at.is_(None),
         )
         .group_by(Transaction.currency, Transaction.type)
+        .order_by(Transaction.currency, Transaction.type)
     )
+    if currency_limit is not None:
+        if type(currency_limit) is not int or currency_limit < 1:
+            raise ValueError("Currency limit must be a positive integer")
+        statement = statement.limit(currency_limit * 2)
+    rows = await session.execute(statement)
     result: dict[str, dict[str, int]] = {}
     for currency, kind, total in rows:
         result.setdefault(str(currency), {})[str(kind)] = int(total or 0)
@@ -128,7 +139,11 @@ async def period_transactions(
             Transaction.occurred_at < end,
             Transaction.deleted_at.is_(None),
         )
-        .order_by(Transaction.occurred_at.desc(), Transaction.created_at.desc())
+        .order_by(
+            Transaction.occurred_at.desc(),
+            Transaction.created_at.desc(),
+            Transaction.id.desc(),
+        )
         .limit(limit)
     )
     return [_report_transaction(row) for row in rows.all()]

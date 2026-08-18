@@ -1,5 +1,5 @@
 from calendar import monthrange
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from enum import StrEnum
 from uuid import UUID
@@ -15,13 +15,13 @@ class TransactionType(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class TransactionDraft:
-    amount_minor: int
-    type: TransactionType
-    occurred_at: datetime | None = None
-    category_hint: str | None = None
-    category_explicit: bool = False
-    account_hint: str | None = None
-    description: str = ""
+    amount_minor: int = field(repr=False)
+    type: TransactionType = field(repr=False)
+    occurred_at: datetime | None = field(default=None, repr=False)
+    category_hint: str | None = field(default=None, repr=False)
+    category_explicit: bool = field(default=False, repr=False)
+    account_hint: str | None = field(default=None, repr=False)
+    description: str = field(default="", repr=False)
     needs_confirmation: bool = False
 
     def __post_init__(self) -> None:
@@ -34,13 +34,13 @@ class TransactionDraft:
 
 @dataclass(frozen=True, slots=True)
 class TransactionView:
-    id: UUID
-    amount_minor: int
-    type: TransactionType
-    category: str
-    account: str
-    occurred_at: datetime
-    description: str
+    id: UUID = field(repr=False)
+    amount_minor: int = field(repr=False)
+    type: TransactionType = field(repr=False)
+    category: str = field(repr=False)
+    account: str = field(repr=False)
+    occurred_at: datetime = field(repr=False)
+    description: str = field(repr=False)
 
 
 def period_bounds(day: date, tz_name: str) -> tuple[datetime, datetime]:

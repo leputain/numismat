@@ -9,7 +9,11 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 @pytest.fixture(scope="session", autouse=True)
 async def require_isolated_test_database() -> AsyncIterator[None]:
-    """Fail before any fixture cleanup unless both configured and connected DBs are `_test`."""
+    """Configure test-only security and fail unless both database identities are `_test`."""
+    os.environ.setdefault(
+        "BANK_IMPORT_SECURITY_KEY",
+        "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+    )
     configured = os.environ.get("TEST_DATABASE_URL", "")
     if not configured:
         pytest.fail("TEST_DATABASE_URL is required for integration tests")

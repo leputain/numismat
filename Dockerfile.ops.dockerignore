@@ -1,4 +1,7 @@
 .git
+.agents
+.ai-factory
+.ai-factory.json
 .env
 .env.*
 !.env.example
@@ -10,6 +13,8 @@
 .hypothesis
 **/__pycache__
 **/*.pyc
+web/node_modules
+web/dist
 backups
 secrets
 tests

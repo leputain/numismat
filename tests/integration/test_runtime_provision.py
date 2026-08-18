@@ -73,6 +73,26 @@ def test_runtime_role_is_idempotent_and_fail_closed_on_public_privileges() -> No
             with runtime_connection.cursor() as cursor:
                 cursor.execute("SELECT version_num FROM public.alembic_version")
                 assert cursor.fetchone() is not None
+                for table_name in ("web_sessions", "http_idempotency"):
+                    cursor.execute(
+                        "SELECT has_table_privilege(current_user, %s, 'SELECT'), "
+                        "has_table_privilege(current_user, %s, 'INSERT'), "
+                        "has_table_privilege(current_user, %s, 'UPDATE'), "
+                        "has_table_privilege(current_user, %s, 'DELETE'), "
+                        "has_table_privilege(current_user, %s, 'TRUNCATE'), "
+                        "has_table_privilege(current_user, %s, 'REFERENCES'), "
+                        "has_table_privilege(current_user, %s, 'TRIGGER')",
+                        (table_name,) * 7,
+                    )
+                    assert cursor.fetchone() == (
+                        True,
+                        True,
+                        True,
+                        True,
+                        False,
+                        False,
+                        False,
+                    )
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
                     cursor.execute("UPDATE public.alembic_version SET version_num = version_num")
             runtime_connection.rollback()

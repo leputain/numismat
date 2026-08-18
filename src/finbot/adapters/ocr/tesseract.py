@@ -5,12 +5,17 @@ from collections.abc import Awaitable, Buffer, Callable
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from finbot.application.ocr import MAX_OCR_TEXT_LENGTH, OcrImportError
+from finbot.application.ocr import (
+    MAX_OCR_IMAGE_BYTES,
+    MAX_OCR_TEXT_LENGTH,
+    SUPPORTED_OCR_IMAGE_MIME_TYPES,
+    OcrImportError,
+)
 
-MAX_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_IMAGE_BYTES = MAX_OCR_IMAGE_BYTES
 MAX_IMAGE_PIXELS = 20_000_000
 MAX_IMAGE_EDGE = 5_000
-SUPPORTED_IMAGE_MIME_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
+SUPPORTED_IMAGE_MIME_TYPES = SUPPORTED_OCR_IMAGE_MIME_TYPES
 _FORMAT_TO_MIME = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
 _TESSERACT_TIMEOUT_SECONDS = 20.0
 

@@ -171,6 +171,78 @@ async def _draft_callback_data(
 
 
 @pytest.mark.asyncio
+async def test_discard_rejects_replay_from_a_non_current_telegram_message() -> None:
+    engine = create_async_engine(DATABASE_URL)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    await _cleanup_database(factory)
+    fake_session = FakeTelegramSession()
+    bot = Bot("123456:synthetic_test_token", session=fake_session)
+    settings = Settings(
+        telegram_bot_token="123456:synthetic_test_token",
+        owner_telegram_user_id=OWNER_ID,
+        database_url=DATABASE_URL,
+    )
+    dispatcher = build_dispatcher(settings)
+
+    try:
+        await dispatcher.feed_update(
+            bot,
+            Update.model_validate(
+                _message_update(UPDATE_BASE, 1, "/wizard"),
+                context={"bot": bot},
+            ),
+        )
+        wizard_message_id = fake_session.last_message_id
+        discard = await _draft_callback_data(factory, DraftAction.DISCARD)
+
+        await dispatcher.feed_update(
+            bot,
+            Update.model_validate(
+                _callback_update(
+                    UPDATE_BASE + 1,
+                    wizard_message_id + 999,
+                    discard,
+                ),
+                context={"bot": bot},
+            ),
+        )
+
+        async with factory() as session:
+            draft_count = await session.scalar(
+                text(
+                    "SELECT count(*) FROM drafts "
+                    "JOIN users ON users.id = drafts.user_id "
+                    "WHERE users.telegram_user_id = :telegram_id"
+                ),
+                {"telegram_id": OWNER_ID},
+            )
+        assert draft_count == 1
+
+        await dispatcher.feed_update(
+            bot,
+            Update.model_validate(
+                _callback_update(UPDATE_BASE + 2, wizard_message_id, discard),
+                context={"bot": bot},
+            ),
+        )
+
+        async with factory() as session:
+            draft_count = await session.scalar(
+                text(
+                    "SELECT count(*) FROM drafts "
+                    "JOIN users ON users.id = drafts.user_id "
+                    "WHERE users.telegram_user_id = :telegram_id"
+                ),
+                {"telegram_id": OWNER_ID},
+            )
+        assert draft_count == 0
+    finally:
+        await _cleanup_database(factory)
+        await bot.session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_wizard_back_returns_one_step_and_keeps_upstream_data() -> None:
     engine = create_async_engine(DATABASE_URL)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -336,7 +408,8 @@ async def test_wizard_back_returns_one_step_and_keeps_upstream_data() -> None:
                 )
             ).one()
             assert state == "wizard_account"
-            assert payload["amount"] == 170000
+            assert payload["amount_minor"] == 170000
+            assert "amount" not in payload
             assert payload["category_id"] == str(category_id)
     finally:
         await _cleanup_database(factory)
@@ -666,7 +739,7 @@ async def test_complete_wizard_survives_dispatcher_and_persists() -> None:
                 {"user_id": user_id},
             )
             assert quick_count == 1
-            assert quick_state == "quick_confirm"
+            assert quick_state == "review"
 
         quick_review_message_id = fake_session.last_message_id
         await dispatcher.feed_update(

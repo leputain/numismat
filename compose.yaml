@@ -28,6 +28,11 @@ services:
       DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Europe/Moscow}
       DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-RUB}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MINIAPP_PUBLIC_URL: ${MINIAPP_PUBLIC_URL:?MINIAPP_PUBLIC_URL is required}
+      BANK_IMPORT_SECURITY_KEY: ${BANK_IMPORT_SECURITY_KEY:?BANK_IMPORT_SECURITY_KEY is required}
+      LOCAL_AI_ENABLED: ${LOCAL_AI_ENABLED:-false}
+      LOCAL_AI_ENDPOINT: ${LOCAL_AI_ENDPOINT:-}
+      LOCAL_AI_MODEL: ${LOCAL_AI_MODEL:-}
     depends_on: {migrate: {condition: service_completed_successfully}}
     read_only: true
     tmpfs: [/tmp]
@@ -42,5 +47,74 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+  api:
+    build: .
+    command: ["python", "-m", "finbot.adapters.http.server"]
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      OWNER_TELEGRAM_USER_ID: ${OWNER_TELEGRAM_USER_ID:-0}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://finbot:finbot-dev-only@db:5432/finbot}
+      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-ru_RU}
+      DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Europe/Moscow}
+      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-RUB}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+      MINIAPP_PUBLIC_URL: ${MINIAPP_PUBLIC_URL:?MINIAPP_PUBLIC_URL is required}
+      HTTP_SECURITY_KEY: ${HTTP_SECURITY_KEY:?HTTP_SECURITY_KEY is required}
+      BANK_IMPORT_SECURITY_KEY: ${BANK_IMPORT_SECURITY_KEY:?BANK_IMPORT_SECURITY_KEY is required}
+    depends_on: {migrate: {condition: service_completed_successfully}}
+    ports: ["127.0.0.1:${API_PUBLISHED_PORT:-8080}:8080"]
+    read_only: true
+    tmpfs: ["/tmp:noexec,nosuid,nodev,size=16m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    pids_limit: 100
+    logging: {driver: local}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=5).close()
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+  recurring-runner:
+    build: .
+    command: ["python", "-m", "finbot.recurring_runner"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://finbot:finbot-dev-only@db:5432/finbot}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      RECURRING_TICK_INTERVAL_SECONDS: ${RECURRING_TICK_INTERVAL_SECONDS:-30}
+    depends_on: {migrate: {condition: service_completed_successfully}}
+    read_only: true
+    tmpfs: ["/tmp:noexec,nosuid,nodev,size=16m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    pids_limit: 50
+    logging: {driver: local}
+  mcp:
+    profiles: [mcp]
+    build: .
+    command: ["python", "-m", "finbot.adapters.mcp"]
+    environment:
+      OWNER_TELEGRAM_USER_ID: ${OWNER_TELEGRAM_USER_ID:-0}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://finbot:finbot-dev-only@db:5432/finbot}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on: {migrate: {condition: service_completed_successfully}}
+    stdin_open: true
+    read_only: true
+    tmpfs: ["/tmp:noexec,nosuid,nodev,size=16m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    pids_limit: 50
+    logging: {driver: local}
 volumes:
   db_data:

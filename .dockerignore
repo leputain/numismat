@@ -1,4 +1,7 @@
 .git
+.agents
+.ai-factory
+.ai-factory.json
 .env
 .env.*
 !.env.example
@@ -8,6 +11,8 @@
 .mypy_cache
 .ruff_cache
 .hypothesis
+web/node_modules
+web/dist
 htmlcov
 .coverage
 .coverage.*

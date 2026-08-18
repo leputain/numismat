@@ -1,6 +1,6 @@
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -112,11 +112,11 @@ def suggest_rule_candidates(description: str, limit: int = 4) -> tuple[str, ...]
 
 @dataclass(frozen=True, slots=True)
 class CategoryRuleSpec:
-    id: UUID
-    category_id: UUID
-    kind: TransactionType
-    normalized_pattern: str
-    account_id: UUID | None = None
+    id: UUID = field(repr=False)
+    category_id: UUID = field(repr=False)
+    kind: TransactionType = field(repr=False)
+    normalized_pattern: str = field(repr=False)
+    account_id: UUID | None = field(default=None, repr=False)
     version: int = 1
     updated_at: datetime | None = None
 

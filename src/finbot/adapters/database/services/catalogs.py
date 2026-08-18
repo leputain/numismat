@@ -1,10 +1,12 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from finbot.adapters.database.models import Account, Category, User
+from finbot.application.catalogs import MAX_BOUNDED_CATALOG_ITEMS
+from finbot.application.errors import CatalogUnavailableError
 from finbot.application.services.catalogs import (
     catalog_slug,
     ensure_expected_version,
@@ -26,6 +28,46 @@ async def _lock_owner(session: AsyncSession, user_id: UUID) -> User:
     return user
 
 
+async def ensure_account_destination_capacity(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    archived: bool,
+) -> None:
+    """Fail closed at the catalog cap; caller must already hold the owner row lock."""
+
+    archive_filter = Account.archived_at.is_not(None) if archived else Account.archived_at.is_(None)
+    at_capacity = await session.scalar(
+        select(Account.id)
+        .where(Account.user_id == user_id, archive_filter)
+        .offset(MAX_BOUNDED_CATALOG_ITEMS - 1)
+        .limit(1)
+    )
+    if at_capacity is not None:
+        raise CatalogUnavailableError("Справочник счетов достиг допустимого размера")
+
+
+async def ensure_category_destination_capacity(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    archived: bool,
+) -> None:
+    """Fail closed at the catalog cap; caller must already hold the owner row lock."""
+
+    archive_filter = (
+        Category.archived_at.is_not(None) if archived else Category.archived_at.is_(None)
+    )
+    at_capacity = await session.scalar(
+        select(Category.id)
+        .where(Category.user_id == user_id, archive_filter)
+        .offset(MAX_BOUNDED_CATALOG_ITEMS - 1)
+        .limit(1)
+    )
+    if at_capacity is not None:
+        raise CatalogUnavailableError("Справочник категорий достиг допустимого размера")
+
+
 async def create_account(session: AsyncSession, user_id: UUID, name: str, currency: str) -> Account:
     clean = normalize_catalog_name(name)
     slug = catalog_slug(clean)
@@ -36,6 +78,7 @@ async def create_account(session: AsyncSession, user_id: UUID, name: str, curren
     if existing is not None:
         location = "в архиве" if existing.archived_at is not None else "в списке счетов"
         raise ValueError(f"Счёт с таким названием уже есть {location}")
+    await ensure_account_destination_capacity(session, user_id, archived=False)
     account = Account(
         user_id=user_id,
         name=clean,
@@ -112,13 +155,18 @@ async def archive_account(
         raise ObjectNotFoundError("Счёт не найден")
     if account.id == user.default_account_id:
         raise ValueError("Сначала выберите другой основной счёт")
-    active_count = await session.scalar(
-        select(func.count(Account.id)).where(
-            Account.user_id == user_id, Account.archived_at.is_(None)
+    another_active = await session.scalar(
+        select(Account.id)
+        .where(
+            Account.user_id == user_id,
+            Account.archived_at.is_(None),
+            Account.id != account.id,
         )
+        .limit(1)
     )
-    if int(active_count or 0) <= 1:
+    if another_active is None:
         raise ValueError("Нельзя архивировать последний активный счёт")
+    await ensure_account_destination_capacity(session, user_id, archived=True)
     account.archived_at = datetime.now(UTC)
     account.version += 1
     await session.flush()
@@ -146,6 +194,7 @@ async def restore_account(
     ensure_expected_version("Счёт", account.version, expected_version)
     if account.archived_at is None:
         raise ObjectNotFoundError("Архивный счёт не найден")
+    await ensure_account_destination_capacity(session, user_id, archived=False)
     account.archived_at = None
     account.version += 1
     await session.flush()
@@ -198,6 +247,7 @@ async def create_category(session: AsyncSession, user_id: UUID, name: str, kind:
     if existing is not None:
         location = "в архиве" if existing.archived_at is not None else "в списке категорий"
         raise ValueError(f"Категория с таким названием уже есть {location}")
+    await ensure_category_destination_capacity(session, user_id, archived=False)
     category = Category(
         user_id=user_id,
         kind=kind,
@@ -274,15 +324,19 @@ async def archive_category(
     ensure_expected_version("Категория", category.version, expected_version)
     if category.archived_at is not None:
         raise ObjectNotFoundError("Категория не найдена")
-    active_count = await session.scalar(
-        select(func.count(Category.id)).where(
+    another_active = await session.scalar(
+        select(Category.id)
+        .where(
             Category.user_id == user_id,
             Category.kind == category.kind,
             Category.archived_at.is_(None),
+            Category.id != category.id,
         )
+        .limit(1)
     )
-    if int(active_count or 0) <= 1:
+    if another_active is None:
         raise ValueError("Нельзя архивировать последнюю категорию этого типа")
+    await ensure_category_destination_capacity(session, user_id, archived=True)
     category.archived_at = datetime.now(UTC)
     category.version += 1
     await session.flush()
@@ -310,6 +364,7 @@ async def restore_category(
     ensure_expected_version("Категория", category.version, expected_version)
     if category.archived_at is None:
         raise ObjectNotFoundError("Архивная категория не найдена")
+    await ensure_category_destination_capacity(session, user_id, archived=False)
     category.archived_at = None
     category.version += 1
     await session.flush()

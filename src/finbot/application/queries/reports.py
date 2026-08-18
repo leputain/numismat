@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -6,24 +6,24 @@ from uuid import UUID
 
 @dataclass(frozen=True, slots=True)
 class CategoryTotal:
-    name: str
-    emoji: str
-    currency: str
-    amount_minor: int
+    name: str = field(repr=False)
+    emoji: str = field(repr=False)
+    currency: str = field(repr=False)
+    amount_minor: int = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
 class ReportTransaction:
-    id: UUID
-    type: str
-    amount_minor: int
-    currency: str
-    occurred_at: datetime
-    description: str
-    version: int
-    category_name: str
-    category_emoji: str
-    account_name: str
+    id: UUID = field(repr=False)
+    type: str = field(repr=False)
+    amount_minor: int = field(repr=False)
+    currency: str = field(repr=False)
+    occurred_at: datetime = field(repr=False)
+    description: str = field(repr=False)
+    version: int = field(repr=False)
+    category_name: str = field(repr=False)
+    category_emoji: str = field(repr=False)
+    account_name: str = field(repr=False)
 
 
 class ReportQueries(Protocol):

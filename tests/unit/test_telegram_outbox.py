@@ -5,7 +5,14 @@ import pytest
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import EditMessageText
-from aiogram.types import Chat, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    Chat,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from finbot.adapters.database.models import TelegramResponseOutbox
@@ -25,6 +32,22 @@ def test_inline_keyboard_serialization_is_json_safe_and_schema_bound() -> None:
     payload = serialize_reply_markup(keyboard)
 
     assert payload == {"inline_keyboard": [[{"text": "Open", "callback_data": "safe:1"}]]}
+
+
+def test_reply_keyboard_serialization_is_json_safe_and_schema_bound() -> None:
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Open")]],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+    payload = serialize_reply_markup(keyboard)
+
+    assert payload == {
+        "keyboard": [[{"text": "Open"}]],
+        "is_persistent": True,
+        "resize_keyboard": True,
+    }
 
 
 def test_queue_send_message_rejects_unsafe_method_fields_before_database() -> None:
@@ -55,6 +78,18 @@ def test_queue_send_message_rejects_unsafe_method_fields_before_database() -> No
             chat_id=3,
             message_id=0,
             text="safe",
+        )
+    with pytest.raises(ValueError, match="Reply keyboards"):
+        queue_edit_message_text(
+            session,
+            update_id=1,
+            owner_telegram_user_id=2,
+            chat_id=3,
+            message_id=4,
+            text="safe",
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text="Open")]],
+            ),
         )
 
 
@@ -106,6 +141,44 @@ async def test_missing_edit_target_falls_back_to_fresh_receipt() -> None:
     await deliver_response(cast(Bot, bot), _edit_response())
 
     assert bot.sent == 1
+
+
+class _SendBot:
+    def __init__(self) -> None:
+        self.kwargs: dict[str, object] = {}
+
+    async def send_message(self, **kwargs: Any) -> Message:
+        self.kwargs = kwargs
+        return Message(
+            message_id=99,
+            date=datetime.now(UTC),
+            chat=Chat(id=3, type="private"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_delivery_rehydrates_a_validated_reply_keyboard() -> None:
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Open")]],
+        resize_keyboard=True,
+    )
+    response = TelegramResponseOutbox(
+        update_id=1,
+        sequence=0,
+        owner_telegram_user_id=2,
+        chat_id=3,
+        method="send_message",
+        message_id=None,
+        body="Receipt",
+        parse_mode="HTML",
+        reply_markup=serialize_reply_markup(keyboard),
+    )
+    bot = _SendBot()
+
+    await deliver_response(cast(Bot, bot), response)
+
+    assert isinstance(bot.kwargs["reply_markup"], ReplyKeyboardMarkup)
+    assert bot.kwargs["reply_markup"].resize_keyboard is True
 
 
 def test_pending_select_waits_for_delivery_lock_instead_of_skipping() -> None:

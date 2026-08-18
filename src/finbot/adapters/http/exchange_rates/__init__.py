@@ -1,0 +1,1 @@
+"""HTTP exchange-rate adapter."""
