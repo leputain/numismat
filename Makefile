@@ -12,7 +12,8 @@ OPS_COMPOSE = $(COMPOSE) -p $(OPS_PROJECT) -f compose.ops.yaml
 	restore-drill healthcheck openapi frontend-install frontend-api-generate \
 	openapi-check frontend-api-check frontend-typecheck frontend-test frontend-build \
 	frontend-check frontend-audit \
-	web-image web-edge-smoke web-secrets-check release-gate release-gate-ci
+	web-image web-edge-smoke web-secrets-check release-gate release-gate-ci \
+	release-gate-ci-timed
 
 COMPOSE_CONFIG_HTTP_ENV = MINIAPP_PUBLIC_URL=https://numismat.invalid \
 	HTTP_SECURITY_KEY=invalid-compose-config-placeholder \
@@ -167,6 +168,13 @@ release-gate-ci:
 	$(MAKE) openapi-check
 	$(MAKE) frontend-api-check
 	$(MAKE) frontend-audit
+
+release-gate-ci-timed:
+	bash scripts/release-gate-timed.sh "uv sync --frozen" $(UV) sync --frozen
+	bash scripts/release-gate-timed.sh "compose-config" $(MAKE) compose-config
+	bash scripts/release-gate-timed.sh "openapi-check" $(MAKE) openapi-check
+	bash scripts/release-gate-timed.sh "frontend-api-check" $(MAKE) frontend-api-check
+	bash scripts/release-gate-timed.sh "frontend-audit" $(MAKE) frontend-audit
 
 audit:
 	@set -euo pipefail; \
