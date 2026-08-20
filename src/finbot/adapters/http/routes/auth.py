@@ -77,16 +77,23 @@ def _raw_header(
     return value
 
 
-def _require_exact_origin(request: Request, expected_origin: str) -> None:
+def _require_exact_origin(
+    request: Request,
+    expected_origin: str,
+    *,
+    allow_missing: bool = False,
+) -> None:
     raw = _raw_header(
         request,
         b"origin",
-        required=True,
+        required=not allow_missing,
         error_code=HttpErrorCode.ORIGIN_FORBIDDEN,
         status_code=403,
     )
+    if raw is None:
+        return
     try:
-        value = raw.decode("ascii") if raw is not None else ""
+        value = raw.decode("ascii")
     except UnicodeDecodeError as exc:
         raise HttpApiError(status_code=403, code=HttpErrorCode.ORIGIN_FORBIDDEN) from exc
     if value != expected_origin:
@@ -207,7 +214,9 @@ def auth_router(service: TelegramAuthService, *, expected_origin: str) -> APIRou
     )
     async def telegram_auth(request: Request) -> Response:
         try:
-            _require_exact_origin(request, expected_origin)
+            # Native Telegram WebViews may omit Origin on their initial signed login.
+            # A present Origin stays exact; the HMAC/owner/TTL/replay gates remain authoritative.
+            _require_exact_origin(request, expected_origin, allow_missing=True)
             body = await _bounded_auth_body(request)
             result = await service.login(body.initData)
         except TelegramAuthVerificationError as exc:

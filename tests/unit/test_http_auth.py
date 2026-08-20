@@ -556,6 +556,23 @@ async def test_auth_streaming_body_limit_ignores_missing_or_lying_content_length
 
 
 @pytest.mark.asyncio
+async def test_signed_telegram_login_accepts_missing_origin_from_native_webview() -> None:
+    owner = AuthOwner(uuid7(), "ru_RU", "Europe/Moscow", "RUB")
+    persistence = FakeAuthPersistence(owner)
+
+    async with _client(_auth_app(persistence)) as client:
+        response = await client.post(
+            "/api/v1/auth/telegram",
+            headers={"Content-Type": "application/json"},
+            content=json.dumps({"initData": _signed_init_data()}),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["authenticated"] is True
+    assert persistence.created_session_digest is not None
+
+
+@pytest.mark.asyncio
 async def test_auth_boundary_rejects_ambiguous_security_headers_with_fixed_codes() -> None:
     owner = AuthOwner(uuid7(), "ru_RU", "Europe/Moscow", "RUB")
     persistence = FakeAuthPersistence(owner)
@@ -563,11 +580,6 @@ async def test_auth_boundary_rejects_ambiguous_security_headers_with_fixed_codes
     body = json.dumps({"initData": _signed_init_data()})
 
     async with _client(app) as client:
-        missing_origin = await client.post(
-            "/api/v1/auth/telegram",
-            headers={"Content-Type": "application/json"},
-            content=body,
-        )
         duplicate_origin = await client.post(
             "/api/v1/auth/telegram",
             headers=[
@@ -627,8 +639,6 @@ async def test_auth_boundary_rejects_ambiguous_security_headers_with_fixed_codes
             ],
         )
 
-    assert missing_origin.status_code == 403
-    assert missing_origin.json()["error"]["code"] == "origin_forbidden"
     assert duplicate_origin.status_code == 403
     assert duplicate_origin.json()["error"]["code"] == "origin_forbidden"
     assert duplicate_type.status_code == 422
