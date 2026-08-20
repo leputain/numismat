@@ -791,6 +791,8 @@ async def test_auth_openapi_retains_manual_body_schema() -> None:
     assert body_schema["title"] == "TelegramAuthRequest"
     assert set(body_schema["required"]) == {"initData"}
     assert body_schema["properties"]["initData"]["maxLength"] == 8192
+    session_schema = schema["components"]["schemas"]["AuthSessionResponse"]
+    assert session_schema["properties"]["expires_at"]["format"] == "date-time"
     assert schema["components"]["securitySchemes"]["SessionCookie"] == {
         "in": "cookie",
         "name": "__Host-numismat_session",

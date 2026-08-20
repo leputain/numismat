@@ -19,7 +19,7 @@ class AuthSessionResponse(ApiModel):
     locale: str = Field(min_length=1, max_length=16)
     timezone: str = Field(min_length=1, max_length=64)
     base_currency: str = Field(pattern=r"^[A-Z]{3}$")
-    expires_at: datetime
+    expires_at: datetime = Field(json_schema_extra={"format": "date-time"})
 
     @field_serializer("expires_at", when_used="json")
     def _serialize_expires_at(self, value: datetime) -> str:
