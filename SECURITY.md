@@ -158,11 +158,12 @@ receipt также не должен раскрывать текст/keyboard в
 ## Telegram Mini App и HTTP session
 
 Production HTTP auth не имеет bypass и запускается только при валидных `MINIAPP_PUBLIC_URL` и `HTTP_SECURITY_KEY`.
-Public URL обязан быть одним canonical HTTPS origin без credentials, query или fragment. Initial signed Telegram login
-считает один bounded ASCII `Origin` необязательной transport metadata: native WebView не предоставляет единый portable
-Origin contract, поэтому authority задают verified Telegram HMAC, exact owner, TTL и replay denial. Duplicate, empty,
-oversized и non-ASCII Origin отклоняются. Logout и все protected mutations всегда требуют exact Origin. Security key — независимые 32 random bytes, он не
-совпадает с Telegram bot token и поступает через environment или `/run/secrets/http_security_key`.
+Public URL обязан быть одним canonical HTTPS origin без credentials, query или fragment. Signed login, logout и
+protected mutations считают один bounded ASCII `Origin` необязательной transport metadata: native WebView не
+предоставляет единый portable Origin contract. Duplicate, empty, oversized и non-ASCII Origin отклоняются. Для login
+authority задают verified Telegram HMAC, exact owner, TTL и replay denial; для logout и mutations — host-only session
+и double-submit CSRF, а для mutations дополнительно canonical idempotency key. Security key — независимые 32 random
+bytes, он не совпадает с Telegram bot token и поступает через environment или `/run/secrets/http_security_key`.
 
 `POST /api/v1/auth/telegram` принимает не более 12 KiB JSON и 8 KiB raw `initData`, запрещает ambiguous/duplicate
 fields и проверяет официальный Telegram HMAC до использования `user`/`auth_date`. Принимается только configured owner,
@@ -173,9 +174,10 @@ skew`, включая logout: повтор всегда получает conflic
 
 Session и CSRF генерируются независимо с 256-bit entropy и живут один час. Браузер получает host-only cookies
 `__Host-numismat_session` (`HttpOnly; Secure; SameSite=Strict; Path=/`) и `__Host-numismat_csrf`
-(`Secure; SameSite=Strict; Path=/`). State-changing endpoint требует точного совпадения CSRF cookie/header и exact
-Origin. Duplicate/oversized Cookie, Origin, CSRF, Content-Type или encoded body отклоняются fail closed. Invalid/stale
-session очищает обе cookies; CSRF failure не revoke-ит валидную session.
+(`Secure; SameSite=Strict; Path=/`). State-changing endpoint требует точного совпадения CSRF cookie/header; browser
+Origin остаётся только optional bounded transport metadata. Duplicate/empty/oversized/non-ASCII Origin и
+duplicate/oversized Cookie, CSRF, Content-Type или encoded body отклоняются fail closed. Invalid/stale session очищает
+обе cookies; CSRF failure не revoke-ит валидную session.
 
 `GET /api/v1/auth/me` только проверяет session. `POST /api/v1/auth/logout` берёт exclusive row lock и инвалидирует
 её; protected mutation удерживает shared session lock в той же DB transaction до domain/idempotency
@@ -190,8 +192,9 @@ HTTP mutation surface является закрытым typed API: persistent dr
 только как bounded `supported=false` projection без business payload. Draft-changing endpoints для неподдерживаемой
 schema возвращают `409 invalid_state` и не изменяют или удаляют такой draft.
 
-Каждая mutation требует валидную session, exact Origin, double-submit CSRF и один canonical 43-character
-`Idempotency-Key`. JSON ограничен 12 KiB; duplicate/unknown fields, encoded body и non-canonical values отклоняются.
+Каждая mutation требует валидную host-only session, double-submit CSRF и один canonical 43-character
+`Idempotency-Key`; `Origin`, если WebView его передал, валидируется только как bounded однозначная ASCII metadata.
+JSON ограничен 12 KiB; duplicate/unknown fields, encoded body и non-canonical values отклоняются.
 В PostgreSQL попадают только keyed digests семантического fingerprint и минимальный результат.
 
 Порядок блокировок и фиксации един для всех endpoints:

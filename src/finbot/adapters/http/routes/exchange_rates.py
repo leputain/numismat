@@ -64,10 +64,14 @@ _VERSION_QUERY = frozenset({"limit", "cursor"})
 _CONVERTED_QUERY = frozenset({"version_id", "start", "end"})
 _MUTATION_PARAMETERS: list[dict[str, Any]] = [
     {
+        "description": (
+            "Optional bounded transport metadata supplied by the user agent; "
+            "the session cookie and double-submit CSRF proof are authoritative."
+        ),
         "in": "header",
         "name": "Origin",
-        "required": True,
-        "schema": {"format": "uri", "type": "string"},
+        "required": False,
+        "schema": {"maxLength": 4096, "minLength": 1, "type": "string"},
     },
     {
         "in": "header",

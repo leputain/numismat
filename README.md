@@ -131,7 +131,8 @@ draft interactions, OCR и CSV export. `bootstrap.py` остаётся круп�
 handler bodies, прямых ORM-запросов или ручных commit. M2 начат: добавлен отдельный FastAPI process с versioned
 OpenAPI, fixed error envelope и database/Alembic readiness, а Alembic `0007` добавляет bounded web sessions и HTTP
 idempotency только с keyed digests. Реализованы owner-only Telegram `initData` auth, одночасовая opaque cookie-session,
-exact-Origin/CSRF защита, retained proof replay denial и logout с транзакционной блокировкой.
+session/CSRF защита с bounded optional Origin metadata, retained proof replay denial и logout с транзакционной
+блокировкой.
 
 HTTP read API уже включает month-to-date dashboard, bounded period/comparison reports, owner-scoped transaction
 detail и active keyset pagination. Все суммы передаются decimal strings, коллекции имеют жёсткие пределы, а auth и
@@ -140,7 +141,8 @@ detail и active keyset pagination. Все суммы передаются decim
 реализованы owner-only и revision-safe: active/get/create/update/confirm/cancel/resume/replace работают через общий
 persistent draft, а repeat/edit-draft/delete/restore требуют optimistic version. Прямого HTTP transaction-create
 endpoint нет — новая и повторяемая операция появляется в `transactions` только после явного confirm. Каждая mutation
-требует exact Origin, session/CSRF и canonical `Idempotency-Key`; одинаковая семантика возвращает сохранённый
+требует session/CSRF и canonical `Idempotency-Key`; Origin из WebView остаётся optional bounded metadata. Одинаковая
+семантика возвращает сохранённый
 минимальный result, несовместимое повторное использование ключа — typed `409`. HTTP catalog API возвращает полные,
 но жёстко ограниченные списки счетов и категорий, а все create/archive/restore paths — включая Telegram draft input —
 сохраняют лимит под owner lock. `/reports/today` строит границы по timezone владельца; `make openapi` атомарно создаёт

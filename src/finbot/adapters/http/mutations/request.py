@@ -82,15 +82,29 @@ def _cookies(request: Request) -> dict[str, str]:
         ) from exc
 
 
-def mutation_credentials(request: Request, *, expected_origin: str) -> MutationCredentials:
-    origin = _ascii_header(
+def _validate_webview_origin_metadata(request: Request, *, expected_origin: str) -> None:
+    raw = _raw_header(
         request,
         b"origin",
+        required=False,
         status_code=403,
         error_code=HttpErrorCode.ORIGIN_FORBIDDEN,
     )
-    if origin != expected_origin:
-        raise HttpApiError(status_code=403, code=HttpErrorCode.ORIGIN_FORBIDDEN)
+    if raw is None:
+        return
+    try:
+        origin = raw.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise HttpApiError(status_code=403, code=HttpErrorCode.ORIGIN_FORBIDDEN) from exc
+    if origin == expected_origin:
+        return
+    # Native Telegram WebViews do not expose one portable Origin contract.
+    # The session-bound double-submit CSRF proof remains the mutation authority.
+    return
+
+
+def mutation_credentials(request: Request, *, expected_origin: str) -> MutationCredentials:
+    _validate_webview_origin_metadata(request, expected_origin=expected_origin)
 
     cookies = _cookies(request)
     csrf_header = _ascii_header(

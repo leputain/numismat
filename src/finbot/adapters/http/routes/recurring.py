@@ -68,10 +68,14 @@ _SCHEDULE_QUERY = frozenset({"deleted", "limit", "cursor"})
 _INSTANCE_QUERY = frozenset({"limit", "cursor"})
 _MUTATION_PARAMETERS: list[dict[str, Any]] = [
     {
+        "description": (
+            "Optional bounded transport metadata supplied by the user agent; "
+            "the session cookie and double-submit CSRF proof are authoritative."
+        ),
         "in": "header",
         "name": "Origin",
-        "required": True,
-        "schema": {"format": "uri", "type": "string"},
+        "required": False,
+        "schema": {"maxLength": 4096, "minLength": 1, "type": "string"},
     },
     {
         "in": "header",

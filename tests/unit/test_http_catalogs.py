@@ -559,7 +559,11 @@ async def test_catalog_openapi_is_closed_exact_and_resolvable() -> None:
                 "Idempotency-Key",
             }
             for item in header_parameters:
-                if item["name"] in {"X-CSRF-Token", "Idempotency-Key"}:
+                if item["name"] == "Origin":
+                    assert item["required"] is False
+                    assert item["schema"]["maxLength"] == 4096
+                else:
+                    assert item["required"] is True
                     assert item["schema"]["pattern"] == (r"^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$")
 
 

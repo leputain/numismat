@@ -61,10 +61,14 @@ _SESSION_SECURITY: dict[str, Any] = {"security": [{"SessionCookie": []}]}
 _CANONICAL_DIGEST_PATTERN = r"^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
 _MUTATION_PARAMETERS: list[dict[str, Any]] = [
     {
+        "description": (
+            "Optional bounded transport metadata supplied by the user agent; "
+            "the session cookie and double-submit CSRF proof are authoritative."
+        ),
         "in": "header",
         "name": "Origin",
-        "required": True,
-        "schema": {"format": "uri", "type": "string"},
+        "required": False,
+        "schema": {"maxLength": 4096, "minLength": 1, "type": "string"},
     },
     {
         "in": "header",

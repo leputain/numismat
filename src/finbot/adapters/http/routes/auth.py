@@ -77,26 +77,7 @@ def _raw_header(
     return value
 
 
-def _require_exact_origin(
-    request: Request,
-    expected_origin: str,
-) -> None:
-    raw = _raw_header(
-        request,
-        b"origin",
-        required=True,
-        error_code=HttpErrorCode.ORIGIN_FORBIDDEN,
-        status_code=403,
-    )
-    try:
-        value = raw.decode("ascii") if raw is not None else ""
-    except UnicodeDecodeError as exc:
-        raise HttpApiError(status_code=403, code=HttpErrorCode.ORIGIN_FORBIDDEN) from exc
-    if value != expected_origin:
-        raise HttpApiError(status_code=403, code=HttpErrorCode.ORIGIN_FORBIDDEN)
-
-
-def _validate_optional_login_origin(request: Request) -> None:
+def _validate_webview_origin_metadata(request: Request, *, expected_origin: str) -> None:
     raw = _raw_header(
         request,
         b"origin",
@@ -107,9 +88,14 @@ def _validate_optional_login_origin(request: Request) -> None:
     if raw is None:
         return
     try:
-        raw.decode("ascii")
+        origin = raw.decode("ascii")
     except UnicodeDecodeError as exc:
         raise HttpApiError(status_code=403, code=HttpErrorCode.ORIGIN_FORBIDDEN) from exc
+    if origin == expected_origin:
+        return
+    # Native Telegram WebViews do not expose one portable Origin contract.
+    # Signed initData or session-bound double-submit CSRF remains the endpoint authority.
+    return
 
 
 def _cookies(request: Request) -> dict[str, str]:
@@ -228,8 +214,8 @@ def auth_router(service: TelegramAuthService, *, expected_origin: str) -> APIRou
         try:
             # Telegram WebViews do not expose one portable browser Origin contract.
             # Initial-login authority is signed initData, exact owner, TTL, and replay denial.
-            # Origin remains bounded/unambiguous metadata here; protected writes require it exactly.
-            _validate_optional_login_origin(request)
+            # Origin remains bounded/unambiguous transport metadata.
+            _validate_webview_origin_metadata(request, expected_origin=expected_origin)
             body = await _bounded_auth_body(request)
             result = await service.login(body.initData)
         except TelegramAuthVerificationError as exc:
@@ -291,7 +277,7 @@ def auth_router(service: TelegramAuthService, *, expected_origin: str) -> APIRou
         },
     )
     async def auth_logout(request: Request) -> Response:
-        _require_exact_origin(request, expected_origin)
+        _validate_webview_origin_metadata(request, expected_origin=expected_origin)
         cookies = _cookies(request)
         try:
             await service.logout(

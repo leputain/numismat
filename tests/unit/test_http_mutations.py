@@ -476,16 +476,11 @@ async def test_patch_boundary_rejects_ambiguous_or_noncanonical_json(content: by
 
 
 @pytest.mark.asyncio
-async def test_mutation_boundary_enforces_origin_headers_media_type_and_stream_limit() -> None:
+async def test_mutation_boundary_enforces_security_headers_media_type_and_stream_limit() -> None:
     service = FakeMutationService()
     valid = _headers()
 
     async with _client(_app(service)) as client:
-        wrong_origin = await client.post(
-            "/api/v1/drafts",
-            headers={**valid, "Origin": "https://wrong.example.test"},
-            json={},
-        )
         wrong_type = await client.post(
             "/api/v1/drafts",
             headers={**valid, "Content-Type": "text/plain"},
@@ -511,19 +506,76 @@ async def test_mutation_boundary_enforces_origin_headers_media_type_and_stream_l
             ],
             content="{}",
         )
+        empty_origin = await client.post(
+            "/api/v1/drafts",
+            headers=[
+                *(item for item in valid.items() if item[0] != "Origin"),
+                ("Origin", ""),
+                ("Content-Type", "application/json"),
+            ],
+            content="{}",
+        )
+        oversized_origin = await client.post(
+            "/api/v1/drafts",
+            headers={**valid, "Origin": "x" * 4097},
+            json={},
+        )
+        non_ascii_origin = await client.post(
+            "/api/v1/drafts",
+            headers=[
+                *(
+                    (name.encode("ascii"), value.encode("ascii"))
+                    for name, value in valid.items()
+                    if name != "Origin"
+                ),
+                (b"Origin", b"\xff"),
+                (b"Content-Type", b"application/json"),
+            ],
+            content=b"{}",
+        )
         bad_key = await client.post(
             "/api/v1/drafts",
             headers={**valid, "Idempotency-Key": "short"},
             json={},
         )
 
-    assert wrong_origin.status_code == 403
     assert wrong_type.status_code == 415
     assert encoded.status_code == 415
     assert too_large.status_code == 413
     assert duplicate_origin.status_code == 403
+    for response in (empty_origin, oversized_origin, non_ascii_origin):
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == "origin_forbidden"
     assert bad_key.status_code == 422
     assert service.calls == []
+
+
+@pytest.mark.parametrize("origin", [None, "https://web.telegram.org"])
+@pytest.mark.asyncio
+async def test_mutation_accepts_native_webview_origin_metadata_with_valid_csrf(
+    origin: str | None,
+) -> None:
+    service = FakeMutationService()
+    headers = _headers()
+    if origin is None:
+        headers.pop("Origin")
+    else:
+        headers["Origin"] = origin
+
+    async with _client(_app(service)) as client:
+        response = await client.post("/api/v1/drafts", headers=headers, json={})
+        missing_csrf_headers = dict(headers)
+        missing_csrf_headers.pop("X-CSRF-Token")
+        missing_csrf = await client.post(
+            "/api/v1/drafts",
+            headers=missing_csrf_headers,
+            json={},
+        )
+
+    assert response.status_code == 201
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["error"]["code"] == "csrf_failed"
+    assert [call[0] for call in service.calls] == ["create"]
 
 
 @pytest.mark.asyncio
@@ -844,7 +896,11 @@ async def test_mutation_openapi_is_closed_authenticated_and_has_no_dangling_refs
             headers = {item["name"] for item in header_parameters}
             assert headers == {"Origin", "X-CSRF-Token", "Idempotency-Key"}
             for item in header_parameters:
-                if item["name"] in {"X-CSRF-Token", "Idempotency-Key"}:
+                if item["name"] == "Origin":
+                    assert item["required"] is False
+                    assert item["schema"]["maxLength"] == 4096
+                else:
+                    assert item["required"] is True
                     assert item["schema"]["pattern"] == (r"^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$")
 
 

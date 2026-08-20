@@ -135,8 +135,8 @@ synthetic encrypted backup/restore. Production deployment не выполнял�
 - [x] Alembic `0007_http_security_state` добавляет bounded web sessions и HTTP idempotency с keyed digests,
   cleanup indexes, атомарными no-commit repositories, guarded downgrade и least-privilege runtime grants.
 - [x] Telegram Mini App auth проверяет официальный raw `initData` HMAC, bounded `auth_date` и exact owner, запрещает
-  повтор signed proof, выдаёт одночасовую host-only Secure cookie-session, требует exact Origin + CSRF и атомарно
-  инвалидирует сессию при logout.
+  повтор signed proof, выдаёт одночасовую host-only Secure cookie-session, требует session + double-submit CSRF для
+  writes и атомарно инвалидирует сессию при logout; Origin из native WebView валидируется как optional bounded metadata.
 - [x] HTTP finance reads дают month-to-date dashboard, bounded period/comparison reports, owner-scoped detail и
   signed keyset pagination в одной read-only repeatable transaction; money возвращается decimal strings.
 - [x] Revision-safe HTTP draft/transaction mutations реализуют active/get/create/update/confirm/cancel/resume/replace

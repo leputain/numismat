@@ -79,9 +79,11 @@
   Telegram hash, поэтому перестановка параметров и эквивалентное percent-encoding не обходят защиту; proof удерживается
   до конца TTL + skew и не освобождается logout. Потерянный первый auth response требует заново открыть Mini App.
 - Session и CSRF — независимые 256-bit opaque tokens. В БД попадают только domain-separated keyed digests; cookie
-  host-only, Secure и SameSite=Strict, session cookie дополнительно HttpOnly. Exact Origin и double-submit CSRF
-  обязательны для logout и protected mutation endpoints. Shared session lock живёт в той же transaction, что mutation;
-  logout использует exclusive lock, а cookies формируются только после успешного commit.
+  host-only, Secure и SameSite=Strict, session cookie дополнительно HttpOnly. Logout и protected mutation endpoints
+  авторизуются session + double-submit CSRF; один bounded ASCII Origin принимается как optional transport metadata,
+  потому что native Telegram WebViews не гарантируют portable Origin. Duplicate, empty, oversized и non-ASCII Origin
+  fail closed. Shared session lock живёт в той же transaction, что mutation; logout использует exclusive lock, а
+  cookies формируются только после успешного commit.
 - HTTP finance read model не дублирует доменную модель: FastAPI schemas отображают shared query DTO, а SQL adapters
   исполняют auth и составной read в одной `READ ONLY REPEATABLE READ` transaction. Minor units сериализуются decimal
   strings из-за ограничений JavaScript Number; валюты, категории, recent/report rows и page size fail-closed bounded.

@@ -409,6 +409,31 @@ async def test_auth_login_me_logout_lifecycle_and_cookie_flags() -> None:
         assert response.headers["referrer-policy"] == "no-referrer"
 
 
+@pytest.mark.parametrize("origin", [None, "https://web.telegram.org"])
+@pytest.mark.asyncio
+async def test_logout_accepts_native_webview_origin_metadata_with_valid_csrf(
+    origin: str | None,
+) -> None:
+    owner = AuthOwner(uuid7(), "ru_RU", "Europe/Moscow", "RUB")
+    persistence = FakeAuthPersistence(owner)
+
+    async with _client(_auth_app(persistence)) as client:
+        login = await client.post(
+            "/api/v1/auth/telegram",
+            headers={"Origin": ORIGIN},
+            json={"initData": _signed_init_data()},
+        )
+        csrf = client.cookies.get("__Host-numismat_csrf")
+        headers = {"X-CSRF-Token": csrf}
+        if origin is not None:
+            headers["Origin"] = origin
+        logout = await client.post("/api/v1/auth/logout", headers=headers)
+
+    assert login.status_code == 200
+    assert logout.status_code == 204
+    assert persistence.revoked
+
+
 @pytest.mark.asyncio
 async def test_auth_session_expiry_is_portable_rfc3339_milliseconds() -> None:
     precise_now = NOW.replace(microsecond=123_456)
@@ -662,10 +687,6 @@ async def test_auth_boundary_rejects_ambiguous_security_headers_with_fixed_codes
             "/api/v1/auth/logout",
             headers={"Origin": ORIGIN},
         )
-        missing_logout_origin = await client.post(
-            "/api/v1/auth/logout",
-            headers={"X-CSRF-Token": CSRF_TOKEN},
-        )
         duplicate_csrf = await client.post(
             "/api/v1/auth/logout",
             headers=[
@@ -698,8 +719,6 @@ async def test_auth_boundary_rejects_ambiguous_security_headers_with_fixed_codes
     assert encoded.status_code == 415
     assert missing_csrf.status_code == 403
     assert missing_csrf.json()["error"]["code"] == "csrf_failed"
-    assert missing_logout_origin.status_code == 403
-    assert missing_logout_origin.json()["error"]["code"] == "origin_forbidden"
     assert duplicate_csrf.status_code == 403
     assert duplicate_csrf.json()["error"]["code"] == "csrf_failed"
     assert duplicate_csrf.headers.get_list("set-cookie") == []
