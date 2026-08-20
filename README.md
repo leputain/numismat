@@ -216,7 +216,9 @@ make ops-test       synthetic encrypted backup/restore
 make check          полный handoff gate
 make release-gate   релизный gate: compose+openapi+edge+health+audit (без полного pytest)
 make release-gate-ci цель: быстрый CI-совместимый релизный проход (compose/openapi/frontend-api/frontend-audit)
-```
+make release-gate-ci-timed тайминг-версия `release-gate-ci` (каждый шаг c duration)
+make release-gate-timed тайминг-версия полного `release-gate` для локальной диагностики
+``` 
 
 ### Быстрый runbook gate
 
@@ -234,6 +236,8 @@ make release-gate-ci цель: быстрый CI-совместимый рели
 ```bash
 make release-gate-ci   # локально/CI: compose+openapi+frontend API+audit
 make release-gate      # полный локальный prod-like gate
+make release-gate-ci-timed
+make release-gate-timed
 ```
 
 Итоговый M0/M1 handoff gate пройден: frozen sync, Ruff, mypy, unit/integration, dependency audit, пять Compose
