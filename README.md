@@ -238,6 +238,7 @@ make release-gate-ci   # локально/CI: compose+openapi+frontend API+audit
 make release-gate      # полный локальный prod-like gate
 make release-gate-ci-timed
 make release-gate-timed
+make release-gate-ci-timed && gh workflow run release-gate-full.yml # ручной full-prod-like timed run в CI (workflow_dispatch)
 ```
 
 Итоговый M0/M1 handoff gate пройден: frozen sync, Ruff, mypy, unit/integration, dependency audit, пять Compose
