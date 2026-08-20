@@ -21,8 +21,8 @@ function AnalyticsSkeleton() {
         <div className="skeleton h-24 w-full" />
         <div className="skeleton h-24 w-full" />
       </div>
-      <div className="skeleton h-72 w-full" />
       <div className="skeleton h-80 w-full" />
+      <div className="skeleton h-72 w-full" />
       <span className="sr-only">Собираем аналитику…</span>
     </div>
   );
@@ -48,47 +48,58 @@ export function AnalyticsPage() {
   const { current_period: current, comparable_period: comparable, top_categories: categories } =
     dashboard.data;
   return (
-    <div className="page-stack">
+    <div className="page-stack analytics-page">
       <PageHeading
         action={
-          <Link className="button button--primary" to="/draft">
-            Новая запись
+          <Link className="button button--secondary analytics-page__action" to="/transactions">
+            Все операции
           </Link>
         }
-        description="Доходы, расходы и категории без пересчёта между валютами."
-        eyebrow="Картина месяца"
+        description="Сравнение с прошлым месяцем. Суммы в разных валютах показаны отдельно."
+        eyebrow="Финансовая картина"
         title="Аналитика"
       />
 
-      <section aria-label="Сравниваемые периоды" className="analytics-period-grid">
-        <article className="period-card period-card--current">
-          <span>Текущий период</span>
-          <strong>{formatExclusivePeriod(current.start, current.end, locale, timeZone)}</strong>
-        </article>
-        <article className="period-card">
-          <span>Для сравнения</span>
-          <strong>{formatExclusivePeriod(comparable.start, comparable.end, locale, timeZone)}</strong>
-        </article>
-      </section>
-
-      <CashflowTrend end={current.end} start={current.start} />
-
-      <section aria-labelledby="comparison-title">
+      <section aria-labelledby="periods-title" className="analytics-overview">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Месяц к месяцу</p>
-            <h2 className="section-title" id="comparison-title">Динамика расходов</h2>
+            <p className="eyebrow">Границы отчёта</p>
+            <h2 className="section-title" id="periods-title">Периоды сравнения</h2>
+          </div>
+        </div>
+        <div className="analytics-period-grid analytics-overview__periods">
+          <article className="period-card period-card--current">
+            <span>Этот месяц</span>
+            <strong>{formatExclusivePeriod(current.start, current.end, locale, timeZone)}</strong>
+          </article>
+          <article className="period-card">
+            <span>Прошлый месяц</span>
+            <strong>{formatExclusivePeriod(comparable.start, comparable.end, locale, timeZone)}</strong>
+          </article>
+        </div>
+      </section>
+
+      <section aria-labelledby="comparison-title" className="analytics-comparison">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Каждая валюта отдельно</p>
+            <h2 className="section-title" id="comparison-title">Этот месяц и прошлый</h2>
           </div>
           <Link className="text-link" to="/transactions">Операции</Link>
         </div>
         <PeriodComparisonCards comparable={comparable} current={current} />
       </section>
 
-      <section aria-labelledby="analytics-categories-title" className="surface-panel surface-panel--roomy">
+      <CashflowTrend end={current.end} start={current.start} />
+
+      <section
+        aria-labelledby="analytics-categories-title"
+        className="surface-panel surface-panel--roomy analytics-categories"
+      >
         <div className="section-heading section-heading--inside">
           <div>
-            <p className="eyebrow">На что уходит больше всего</p>
-            <h2 className="section-title" id="analytics-categories-title">Структура расходов</h2>
+            <p className="eyebrow">Структура месяца</p>
+            <h2 className="section-title" id="analytics-categories-title">Крупнейшие категории расходов</h2>
           </div>
         </div>
         <CategoryShareList categories={categories} totals={current.totals} />

@@ -50,7 +50,7 @@ export function RecurringPage() {
     if (feed.isError) {
       return (
         <ErrorState
-          description="Список будет перечитан с первой подписанной cursor-страницы."
+          description="Список будет загружен заново с начала."
           onAction={() => void restartRecurringPagination(queryClient)}
         />
       );
@@ -92,11 +92,11 @@ export function RecurringPage() {
   })();
 
   return (
-    <div className="page-stack">
+    <div className="recurring-page page-stack">
       <PageHeading
         action={mode === "active" ? <Link className="button button--primary" to="/recurring/new">Новое</Link> : undefined}
-        description="Runner создаёт только review-черновики. Финансовая операция появится после подтверждения."
-        eyebrow="Review-first автоматизация"
+        description="По расписанию создаётся черновик. Операция появится только после вашего подтверждения."
+        eyebrow="Под вашим контролем"
         title="Регулярные"
       />
       <div aria-label="Раздел расписаний" className="segment-control" role="tablist">

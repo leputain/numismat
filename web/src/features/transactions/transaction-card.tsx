@@ -8,10 +8,12 @@ import { formatTransactionMoney } from "../../shared/finance/money";
 export function TransactionCard({ transaction }: { readonly transaction: Transaction }) {
   const { locale, timeZone } = useSessionFormat();
   const deleted = transaction.deleted_at !== null;
+  const typeLabel = transaction.type === "income" ? "Доход" : "Расход";
+  const typeArrow = transaction.type === "income" ? "↗" : "↘";
   return (
     <Link
-      aria-label={`${transaction.category.name}, ${formatTransactionMoney(transaction.amount_minor, transaction.currency, transaction.type, locale)}`}
-      className="transaction-card"
+      aria-label={`${typeLabel}: ${transaction.category.name}, ${formatTransactionMoney(transaction.amount_minor, transaction.currency, transaction.type, locale)}`}
+      className={`transaction-card transaction-card--${transaction.type}`}
       to={`/transactions/${transaction.id}`}
     >
       <span aria-hidden="true" className="transaction-card__emoji">
@@ -32,6 +34,12 @@ export function TransactionCard({ transaction }: { readonly transaction: Transac
           </span>
         </span>
         <span className="transaction-card__meta">
+          <span
+            className={`transaction-card__type transaction-card__type--${transaction.type}`}
+          >
+            <span aria-hidden="true">{typeArrow}</span>
+            {typeLabel}
+          </span>
           <span>{transaction.account.name}</span>
           <span aria-hidden="true">·</span>
           <time dateTime={transaction.occurred_at}>

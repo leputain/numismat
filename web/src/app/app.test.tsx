@@ -3,6 +3,7 @@ import { MemoryRouter } from "react-router";
 import { describe, expect, it } from "vitest";
 
 import { OfflineBanner } from "./shell/offline-banner";
+import { protectedBackDestination } from "./shell/back-navigation";
 import { PrimaryNavigation } from "./shell/primary-navigation";
 import { AuthErrorState } from "./states/auth-error-state";
 import { LoadingState } from "./states/loading-state";
@@ -37,5 +38,15 @@ describe("protected route shell semantics", () => {
     expect(shell).toContain("Страница не найдена");
     expect(isCanonicalTransactionId("NOT-A-PRIVATE-ID")).toBe(false);
     expect(shell).not.toContain("NOT-A-PRIVATE-ID");
+  });
+
+  it("maps every deep route to a stable Telegram BackButton destination", () => {
+    expect(protectedBackDestination("/transactions/one")).toBe("/transactions");
+    expect(protectedBackDestination("/budgets/new")).toBe("/budgets");
+    expect(protectedBackDestination("/budgets/one/edit")).toBe("/budgets/one");
+    expect(protectedBackDestination("/recurring/one/edit")).toBe("/recurring/one");
+    expect(protectedBackDestination("/imports/one")).toBe("/imports");
+    expect(protectedBackDestination("/rates/one/publish")).toBe("/rates/one");
+    expect(protectedBackDestination("/analytics")).toBeNull();
   });
 });

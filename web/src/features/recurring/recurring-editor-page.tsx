@@ -155,10 +155,10 @@ function RecurringForm({ initial }: { readonly initial: RecurringSchedule | unde
         <div className="field-stack"><label className="field-label" htmlFor="recurring-end">Окончание</label><input className="field-input" disabled={mutation.isPending} id="recurring-end" min={anchorDate} onChange={(event) => setEndsOn(event.currentTarget.value)} type="date" value={endsOn} /></div>
       </div>
       <div className="field-stack"><label className="field-label" htmlFor="recurring-description">Описание</label><input autoComplete="off" className="field-input" disabled={mutation.isPending} id="recurring-description" maxLength={500} onChange={(event) => setDescription(event.currentTarget.value)} type="text" value={description} /></div>
-      {formError === undefined ? null : <p aria-live="polite" className="text-sm text-[#df9a94]" role="alert">{formError}</p>}
+      {formError === undefined ? null : <p aria-live="polite" className="text-sm text-[var(--nm-danger)]" role="alert">{formError}</p>}
       <MutationFeedback error={mutation.error} onRetryUnknown={mutation.retryUnknown} outcomeUnknown={mutation.outcomeUnknown} pending={mutation.isPending} />
       <div className="flex flex-wrap gap-3 pt-2"><button className="button button--primary" disabled={mutation.isPending} type="submit">{mutation.isPending ? "Сохраняем…" : initial === undefined ? "Создать" : "Сохранить"}</button><Link className="button button--secondary" to={initial === undefined ? "/recurring" : `/recurring/${initial.id}`}>Отмена</Link></div>
-      <p className="text-xs leading-relaxed text-stone-500">Часовой пояс {initial?.timezone ?? timeZone} сохраняется как неизменяемый snapshot. DST-разрыв сдвигается вперёд, повторный час использует первый fold.</p>
+      <p className="text-xs leading-relaxed text-[var(--nm-muted)]">Расписание использует часовой пояс {initial?.timezone ?? timeZone}. При переводе часов несуществующее время переносится вперёд.</p>
     </form>
   );
 }
@@ -176,5 +176,5 @@ export function RecurringEditorPage({ scheduleId }: { readonly scheduleId?: stri
   if (scheduleId !== undefined && schedule.isPending) return <PageSkeleton rows={6} />;
   if (scheduleId !== undefined && schedule.isError) return <ErrorState onAction={() => void schedule.refetch()} />;
   if (schedule.data?.state === "deleted") return <ErrorState actionLabel="Назад" description="Сначала восстановите расписание." onAction={() => window.history.back()} title="Редактирование недоступно" />;
-  return <div className="page-stack"><PageHeading description="Runner никогда не сохраняет операцию автоматически: сначала появится review-черновик." eyebrow={scheduleId === undefined ? "Новое правило" : "Версионное изменение"} title={scheduleId === undefined ? "Создать расписание" : "Изменить расписание"} /><RecurringForm initial={schedule.data} key={schedule.data?.id ?? "new"} /></div>;
+  return <div className="recurring-editor-page page-stack"><PageHeading description="Операция не сохраняется автоматически: сначала появится черновик для проверки." eyebrow={scheduleId === undefined ? "Новое правило" : "Изменение расписания"} title={scheduleId === undefined ? "Создать расписание" : "Изменить расписание"} /><RecurringForm initial={schedule.data} key={schedule.data?.id ?? "new"} /></div>;
 }

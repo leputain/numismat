@@ -22,8 +22,9 @@ export function OfflineBanner({ offline }: { readonly offline: boolean }) {
     return null;
   }
   return (
-    <div className="border-b border-amber-200/15 bg-amber-100/8 px-5 py-2 text-center text-xs text-amber-100" role="status">
-      Нет сети. Доступны только уже загруженные данные; изменения временно отключены.
+    <div className="offline-banner" role="status">
+      <span aria-hidden="true" />
+      Нет сети. Можно просматривать загруженное, но изменения временно недоступны.
     </div>
   );
 }

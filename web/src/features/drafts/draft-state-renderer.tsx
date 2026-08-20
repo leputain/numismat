@@ -252,7 +252,7 @@ function EditTypeStep({
   const [type, setType] = useState<"expense" | "income">(draft.transaction?.type ?? "expense");
   return (
     <div className="space-y-5">
-      <StepIntro title="Изменить тип" text="Новый тип и совместимая категория сохраняются атомарно." />
+      <StepIntro title="Изменить тип" text="Новый тип и подходящая категория сохранятся вместе." />
       <div aria-label="Тип операции" className="segment-control">
         <button aria-pressed={type === "expense"} className="segment-control__button" disabled={disabled} onClick={() => setType("expense")} type="button">Расход</button>
         <button aria-pressed={type === "income"} className="segment-control__button" disabled={disabled} onClick={() => setType("income")} type="button">Доход</button>
@@ -303,7 +303,7 @@ export function DraftStateRenderer({
     case "edit_amount":
       return (
         <div className="space-y-5">
-          <StepIntro title="Сумма" text="Введите сумму в валюте выбранного счёта. Она будет проверена сервером." />
+          <StepIntro title="Сумма" text="Введите сумму в валюте выбранного счёта. Перед продолжением мы проверим формат." />
           <TextEntry disabled={disabled} inputMode="decimal" label="Сумма" onSubmit={inputText} placeholder="1 250,50" />
         </div>
       );
@@ -317,7 +317,7 @@ export function DraftStateRenderer({
       }
       return (
         <div className="space-y-5">
-          <StepIntro title="Категория" text="Поиск выполняется только внутри полного bounded-справочника на этом экране." />
+          <StepIntro title="Категория" text="Начните вводить название или выберите категорию из списка." />
           <CategorySelector
             allowCustom={draft.state !== "edit_category" && draft.flow !== "bank_import"}
             disabled={disabled}
@@ -330,7 +330,7 @@ export function DraftStateRenderer({
     case "custom_category":
       return (
         <div className="space-y-5">
-          <StepIntro title="Новая категория" text="Название будет добавлено в справочник после серверной проверки лимита." />
+          <StepIntro title="Новая категория" text="Введите короткое и понятное название. После сохранения категория появится в списке." />
           <TextEntry disabled={disabled} label="Название категории" onSubmit={(value) => inputText(value, "categories")} placeholder="Например, Обучение" />
         </div>
       );
@@ -341,7 +341,7 @@ export function DraftStateRenderer({
     case "edit_account":
       return (
         <div className="space-y-5">
-          <StepIntro title="Счёт" text="Выберите существующий счёт или перейдите к безопасному созданию нового." />
+          <StepIntro title="Счёт" text="Выберите счёт из списка или создайте новый." />
           <AccountSelector
             allowCustom={draft.state !== "edit_account"}
             disabled={disabled}
@@ -353,7 +353,7 @@ export function DraftStateRenderer({
     case "custom_account":
       return (
         <div className="space-y-5">
-          <StepIntro title="Новый счёт" text="Введите название. Сервер назначит базовую валюту владельца." />
+          <StepIntro title="Новый счёт" text="Введите понятное название. Новый счёт будет создан в вашей основной валюте." />
           <TextEntry disabled={disabled} label="Название счёта" onSubmit={(value) => inputText(value, "accounts")} placeholder="Например, Основной" />
         </div>
       );
@@ -371,7 +371,7 @@ export function DraftStateRenderer({
     case "edit_date":
       return (
         <div className="space-y-5">
-          <StepIntro title="Точная дата" text="Календарь преобразует значение в ожидаемый сервером формат ДД.ММ.ГГГГ." />
+          <StepIntro title="Точная дата" text="Выберите день операции в календаре." />
           <DateEntry disabled={disabled} onSubmit={inputText} />
         </div>
       );
@@ -405,7 +405,7 @@ export function DraftStateRenderer({
     case "edit_menu":
       return (
         <div className="space-y-5">
-          <StepIntro title="Что изменить" text="Каждое поле сохраняется отдельной оптимистичной операцией." />
+          <StepIntro title="Что изменить" text="Выберите поле. Каждое изменение сохраняется отдельно." />
           <DraftReview draft={draft} />
           <ReviewActions disabled={disabled} onAction={navigate} />
         </div>
@@ -423,7 +423,7 @@ function UnsupportedState({ onClose }: { onClose(): void }) {
       <span aria-hidden="true" className="state-panel__mark">↗</span>
       <div>
         <h2 className="state-panel__title">Продолжите в Telegram</h2>
-        <p className="state-panel__description">Этот ограниченный сценарий намеренно не реконструируется в Mini App.</p>
+        <p className="state-panel__description">Этот сценарий пока доступен только в чате с ботом. Mini App не меняет его данные.</p>
         <button className="button button--secondary mt-4" onClick={onClose} type="button">Вернуться в Telegram</button>
       </div>
     </section>

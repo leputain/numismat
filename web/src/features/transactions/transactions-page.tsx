@@ -41,7 +41,7 @@ function TransactionFeed({ mode }: { readonly mode: FeedMode }) {
   if (feed.isError) {
     return (
       <ErrorState
-        description="Живая лента будет перечитана с начала — старые cursor-страницы не объединяются с новыми."
+        description="Повторная загрузка начнётся с первой записи, чтобы в истории не появились дубликаты."
         onAction={() => {
           void restartTransactionPagination(queryClient);
         }}
@@ -53,7 +53,7 @@ function TransactionFeed({ mode }: { readonly mode: FeedMode }) {
   if (transactions.length === 0) {
     return mode === "active" ? (
       <EmptyState title="Операций пока нет">
-        <p>Каждая новая запись сначала проходит через проверяемый черновик.</p>
+        <p>Перед сохранением вы сможете проверить сумму, категорию и счёт.</p>
         <Link className="button button--primary mt-5" to="/draft">Создать черновик</Link>
       </EmptyState>
     ) : (
@@ -79,8 +79,8 @@ function TransactionFeed({ mode }: { readonly mode: FeedMode }) {
             {feed.isFetchingNextPage ? "Загружаем…" : "Показать ещё"}
           </button>
           {feed.isFetchNextPageError ? (
-            <p aria-live="polite" className="mt-3 text-sm text-[#df9a94]" role="alert">
-              Следующая страница не загрузилась. Текущие данные сохранены на экране.
+            <p aria-live="polite" className="feed-error" role="alert">
+              Не удалось показать более ранние операции. Уже загруженные записи останутся на экране.
             </p>
           ) : null}
         </div>
@@ -97,10 +97,10 @@ export function TransactionsPage() {
   useEffect(() => emitClientEvent("transactions_opened"), []);
 
   return (
-    <div className="page-stack">
+    <div className="page-stack transactions-page">
       <PageHeading
         action={<Link className="button button--primary" to="/draft">Новая запись</Link>}
-        description="Лента использует живую keyset-пагинацию и обновляется с начала после каждого изменения."
+        description="Свежие операции и удалённые записи. После изменений список обновляется автоматически."
         eyebrow="История"
         title="Операции"
       />
@@ -114,7 +114,7 @@ export function TransactionsPage() {
           role="tab"
           type="button"
         >
-          Активные
+          История
         </button>
         <button
           aria-controls="transaction-feed"

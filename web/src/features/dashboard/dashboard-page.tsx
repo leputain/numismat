@@ -10,6 +10,7 @@ import type {
 } from "../../shared/api/types";
 import { useSessionFormat } from "../../shared/auth/use-session-format";
 import { EmptyState, ErrorState } from "../../shared/components/async-state";
+import { AppIcon } from "../../shared/components/app-icon";
 import { PageHeading } from "../../shared/components/page-heading";
 import { formatExclusivePeriod } from "../../shared/format/date-time";
 import { emitClientEvent } from "../../shared/logging/client-events";
@@ -21,25 +22,26 @@ import {
 } from "../analytics/analytics-insights";
 import { TransactionCard } from "../transactions/transaction-card";
 
-const QUICK_ACTIONS = [
-  { to: "/draft", icon: "+", label: "Добавить", description: "Новая операция", primary: true },
-  { to: "/transactions", icon: "≡", label: "История", description: "Все записи", primary: false },
-  { to: "/analytics", icon: "⌁", label: "Аналитика", description: "Динамика", primary: false },
-  { to: "/budgets", icon: "◎", label: "Бюджеты", description: "Лимиты", primary: false },
+const SECONDARY_ACTIONS = [
+  { to: "/budgets", icon: "budget", label: "Бюджеты", description: "Проверить лимиты" },
+  { to: "/recurring", icon: "recurring", label: "Регулярные", description: "Ближайшие черновики" },
+  { to: "/imports", icon: "import", label: "Импорт", description: "Сверить выписку" },
+  { to: "/rates", icon: "rates", label: "Курсы", description: "Версии для отчётов" },
 ] as const;
 
 function DashboardSkeleton() {
   return (
     <div aria-busy="true" aria-label="Загрузка обзора" className="page-stack" role="status">
       <div className="skeleton h-20 w-full" />
-      <div className="quick-actions">
-        {QUICK_ACTIONS.map((action) => (
+      <div className="summary-grid monthly-results">
+        <div className="skeleton h-48 w-full" />
+        <div className="skeleton h-48 w-full" />
+      </div>
+      <div className="skeleton h-36 w-full" />
+      <div className="quick-actions dashboard-shortcuts__grid">
+        {SECONDARY_ACTIONS.map((action) => (
           <div className="skeleton h-20 w-full" key={action.to} />
         ))}
-      </div>
-      <div className="summary-grid">
-        <div className="skeleton h-48 w-full" />
-        <div className="skeleton h-48 w-full" />
       </div>
       <div className="skeleton h-72 w-full" />
       <span className="sr-only">Собираем обзор…</span>
@@ -119,10 +121,14 @@ export function DashboardPage() {
   const current = dashboard.data.current_period;
   const comparable = dashboard.data.comparable_period;
   return (
-    <div className="page-stack">
+    <div className="page-stack dashboard-page">
       <PageHeading
         action={
-          <Link className="button button--primary" to="/draft">
+          <Link
+            aria-label="Записать новую операцию"
+            className="button button--primary dashboard-primary-action"
+            to="/draft"
+          >
             <span aria-hidden="true">＋</span> Записать
           </Link>
         }
@@ -136,21 +142,37 @@ export function DashboardPage() {
           <span aria-hidden="true" className="draft-banner__icon">✦</span>
           <span className="min-w-0 flex-1">
             <strong>Черновик ждёт проверки</strong>
-            <span>Продолжить с сохранённого шага</span>
+            <span>Продолжить проверку</span>
           </span>
           <span aria-hidden="true">›</span>
         </Link>
       )}
 
-      <section aria-label="Быстрые действия">
-        <div className="quick-actions">
-          {QUICK_ACTIONS.map((action) => (
-            <Link
-              className={`quick-action${action.primary ? " quick-action--primary" : ""}`}
-              key={action.to}
-              to={action.to}
-            >
-              <span aria-hidden="true" className="quick-action__icon">{action.icon}</span>
+      <section aria-labelledby="month-title" className="dashboard-hero">
+        <div className="section-heading dashboard-hero__heading">
+          <div>
+            <p className="eyebrow">Каждая валюта отдельно</p>
+            <h2 className="section-title" id="month-title">Итоги месяца</h2>
+          </div>
+          <Link className="text-link" to="/analytics">Вся аналитика</Link>
+        </div>
+        <MonthlySummaryCards comparable={comparable} current={current} />
+      </section>
+
+      <TodaySection report={today} />
+
+      <section aria-labelledby="shortcuts-title" className="dashboard-shortcuts">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Быстрый доступ</p>
+            <h2 className="section-title" id="shortcuts-title">Инструменты</h2>
+          </div>
+          <Link className="text-link" to="/more">Все</Link>
+        </div>
+        <div className="quick-actions dashboard-shortcuts__grid">
+          {SECONDARY_ACTIONS.map((action) => (
+            <Link className="quick-action dashboard-shortcut" key={action.to} to={action.to}>
+              <span aria-hidden="true" className="quick-action__icon"><AppIcon name={action.icon} /></span>
               <span>
                 <strong>{action.label}</strong>
                 <small>{action.description}</small>
@@ -160,25 +182,12 @@ export function DashboardPage() {
         </div>
       </section>
 
-      <section aria-labelledby="month-title">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">По валютам отдельно</p>
-            <h2 className="section-title" id="month-title">Итоги месяца</h2>
-          </div>
-          <Link className="text-link" to="/analytics">Подробнее</Link>
-        </div>
-        <MonthlySummaryCards comparable={comparable} current={current} />
-      </section>
-
-      <TodaySection report={today} />
-
       <div className="dashboard-columns">
         <section aria-labelledby="categories-title" className="surface-panel">
           <div className="section-heading section-heading--inside">
             <div>
-              <p className="eyebrow">Главные траты</p>
-              <h2 className="section-title" id="categories-title">Категории</h2>
+              <p className="eyebrow">Куда уходят деньги</p>
+              <h2 className="section-title" id="categories-title">Главные расходы</h2>
             </div>
             <Link className="text-link" to="/analytics">Аналитика</Link>
           </div>

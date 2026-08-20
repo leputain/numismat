@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Link } from "react-router";
 
 import { PageHeading } from "../../shared/components/page-heading";
+import { AppIcon } from "../../shared/components/app-icon";
 import { emitClientEvent } from "../../shared/logging/client-events";
 
 const TOOL_GROUPS = [
@@ -11,13 +12,13 @@ const TOOL_GROUPS = [
     items: [
       {
         to: "/budgets",
-        icon: "◎",
+        icon: "budget",
         title: "Бюджеты",
         description: "Лимиты расходов по периоду и валюте",
       },
       {
         to: "/recurring",
-        icon: "↻",
+        icon: "recurring",
         title: "Регулярные операции",
         description: "Расписания с обязательной проверкой черновика",
       },
@@ -29,13 +30,13 @@ const TOOL_GROUPS = [
     items: [
       {
         to: "/rates",
-        icon: "⇄",
+        icon: "rates",
         title: "Курсы валют",
         description: "Версии курсов для явного пересчёта отчётов",
       },
       {
         to: "/imports",
-        icon: "⇣",
+        icon: "import",
         title: "Банковский импорт",
         description: "Загрузка и разбор строк перед записью",
       },
@@ -65,12 +66,12 @@ export function MorePage() {
           <div className="tool-grid">
             {group.items.map((item) => (
               <Link className="tool-card" key={item.to} to={item.to}>
-                <span aria-hidden="true" className="tool-card__icon">{item.icon}</span>
+                <span aria-hidden="true" className="tool-card__icon"><AppIcon name={item.icon} /></span>
                 <span className="tool-card__body">
                   <strong>{item.title}</strong>
                   <span>{item.description}</span>
                 </span>
-                <span aria-hidden="true" className="tool-card__chevron">›</span>
+                <span aria-hidden="true" className="tool-card__chevron"><AppIcon name="chevron-right" /></span>
               </Link>
             ))}
           </div>
@@ -78,7 +79,7 @@ export function MorePage() {
       ))}
 
       <aside className="privacy-note">
-        <span aria-hidden="true">✦</span>
+        <span aria-hidden="true" className="privacy-note__icon"><AppIcon name="shield" /></span>
         <div>
           <strong>Запись только после проверки</strong>
           <p>Черновики, импорт и регулярные операции не создают финансовую запись без вашего подтверждения.</p>

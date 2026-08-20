@@ -19,6 +19,38 @@ const THEME_PROPERTIES = {
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
+const SEMANTIC_COLORS = {
+  dark: {
+    danger: "#df7771",
+    expense: "#d38a70",
+    focus: "#f3d896",
+    income: "#6dba9f",
+  },
+  light: {
+    danger: "#b54843",
+    expense: "#a8543d",
+    focus: "#6f531c",
+    income: "#347961",
+  },
+} as const;
+
+function backgroundColorScheme(value: string): "dark" | "light" {
+  const red = Number.parseInt(value.slice(1, 3), 16);
+  const green = Number.parseInt(value.slice(3, 5), 16);
+  const blue = Number.parseInt(value.slice(5, 7), 16);
+  return (red * 299 + green * 587 + blue * 114) / 1000 >= 150 ? "light" : "dark";
+}
+
+function projectSemanticTheme(background: string, target: CssStyleTarget): void {
+  const scheme = backgroundColorScheme(background);
+  const colors = SEMANTIC_COLORS[scheme];
+  target.style.setProperty("--nm-color-scheme", scheme);
+  target.style.setProperty("--nm-danger", colors.danger);
+  target.style.setProperty("--nm-expense", colors.expense);
+  target.style.setProperty("--nm-focus", colors.focus);
+  target.style.setProperty("--nm-income", colors.income);
+}
+
 export function isTelegramVersionAtLeast(version: unknown, required: string): boolean {
   if (typeof version !== "string" || !/^\d+(?:\.\d+)*$/.test(version)) {
     return false;
@@ -45,6 +77,10 @@ export function projectTelegramTheme(webApp: TelegramWebApp, target: CssStyleTar
       target.style.setProperty(cssProperty, value.toLowerCase());
       projected = true;
     }
+  }
+  const background = webApp.themeParams.bg_color;
+  if (typeof background === "string" && HEX_COLOR.test(background)) {
+    projectSemanticTheme(background, target);
   }
   return projected;
 }

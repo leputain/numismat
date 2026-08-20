@@ -69,7 +69,7 @@ export function BudgetsPage() {
     if (feed.isError) {
       return (
         <ErrorState
-          description="Список будет безопасно перечитан с первой cursor-страницы."
+          description="Список будет загружен заново с начала."
           onAction={() => {
             void restartBudgetPagination(queryClient);
           }}
@@ -117,7 +117,7 @@ export function BudgetsPage() {
   })();
 
   return (
-    <div className="page-stack">
+    <div className="budgets-page page-stack">
       <PageHeading
         action={
           mode === "active" ? (

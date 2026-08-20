@@ -24,10 +24,10 @@ interface TrendPresentation {
 function expenseTrend(currentMinor: string, comparableMinor: string): TrendPresentation {
   const comparison = compareMinor(currentMinor, comparableMinor);
   if (comparison.changeBasisPoints === null) {
-    return { className: "trend-chip--neutral", text: "Расходы: впервые" };
+    return { className: "trend-chip--neutral", text: "Впервые есть расходы" };
   }
   if (comparison.direction === "flat") {
-    return { className: "trend-chip--neutral", text: "Расходы без изменений" };
+    return { className: "trend-chip--neutral", text: "Расходы как месяц назад" };
   }
   const absoluteBasisPoints =
     comparison.changeBasisPoints < 0n
@@ -62,6 +62,9 @@ export function PeriodTotalsCards({
         <article className="today-card" key={total.currency}>
           <span className="summary-card__currency">{total.currency}</span>
           <p className="today-card__net">{formatMoney(total.net_minor, total.currency, locale)}</p>
+          <p className="summary-card__net-label today-card__net-label">
+            Доходы минус расходы
+          </p>
           <div className="today-card__split">
             <span className="money-income">+ {formatMoney(total.income_minor, total.currency, locale)}</span>
             <span className="money-expense">− {formatMoney(total.expense_minor, total.currency, locale)}</span>
@@ -85,11 +88,14 @@ export function MonthlySummaryCards({
     return <p className="quiet-empty">В этом и прошлом месяце операций ещё нет.</p>;
   }
   return (
-    <div className="summary-grid">
+    <div className="summary-grid monthly-results">
       {comparisons.map(({ currency, current: currentTotal, comparable: comparableTotal }) => {
         const trend = expenseTrend(currentTotal.expense_minor, comparableTotal.expense_minor);
         return (
-          <article className="summary-card summary-card--featured" key={currency}>
+          <article
+            className="summary-card summary-card--featured monthly-result-card"
+            key={currency}
+          >
             <div className="summary-card__heading">
               <span className="summary-card__currency">{currency}</span>
               <span className={`trend-chip ${trend.className}`}>{trend.text}</span>
@@ -97,7 +103,7 @@ export function MonthlySummaryCards({
             <p className="summary-card__net">
               {formatMoney(currentTotal.net_minor, currency, locale)}
             </p>
-            <p className="summary-card__net-label">Итог месяца</p>
+            <p className="summary-card__net-label">Доходы минус расходы</p>
             <dl className="summary-card__split">
               <div>
                 <dt>Доходы</dt>
@@ -139,8 +145,8 @@ export function CategoryShareList({
   const { locale } = useSessionFormat();
   if (categories.length === 0) {
     return (
-      <EmptyState title="Категорий пока нет">
-        Доли расходов появятся после первых подтверждённых операций.
+      <EmptyState title="Расходов по категориям пока нет">
+        Структура появится после первого подтверждённого расхода.
       </EmptyState>
     );
   }
@@ -212,7 +218,7 @@ export function PeriodComparisonCards({
     );
   }
   return (
-    <div className="comparison-grid">
+    <div className="comparison-grid analytics-comparison-grid">
       {comparisons.map(({ currency, current: currentTotal, comparable: comparableTotal }) => {
         const expenseComparison = compareMinor(
           currentTotal.expense_minor,
@@ -228,18 +234,18 @@ export function PeriodComparisonCards({
         );
         const trend = expenseTrend(currentTotal.expense_minor, comparableTotal.expense_minor);
         return (
-          <article className="comparison-card" key={currency}>
+          <article className="comparison-card analytics-comparison-card" key={currency}>
             <div className="comparison-card__topline">
               <span className="comparison-card__currency">{currency}</span>
               <span className={`trend-chip ${trend.className}`}>{trend.text}</span>
             </div>
             <div className="comparison-card__hero">
               <div>
-                <span>Расходы сейчас</span>
+                <span>Расходы за месяц</span>
                 <strong>{formatMoney(currentTotal.expense_minor, currency, locale)}</strong>
               </div>
               <div>
-                <span>Разница</span>
+                <span>К прошлому месяцу</span>
                 <strong className={expenseComparison.delta > 0n ? "money-expense" : "money-income"}>
                   {signedMoney(expenseComparison.delta, currency, locale)}
                 </strong>
@@ -277,7 +283,7 @@ export function PeriodComparisonCards({
                 <dd>{formatMoney(currentTotal.net_minor, currency, locale)}</dd>
               </div>
               <div>
-                <dt>Доля остатка</dt>
+                <dt>Остаток от доходов</dt>
                 <dd>{savingsRate === null ? "Нет доходов" : formatBasisPoints(savingsRate)}</dd>
               </div>
             </dl>

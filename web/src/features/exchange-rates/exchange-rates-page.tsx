@@ -27,14 +27,14 @@ export function ExchangeRatesPage() {
     return (
       <div className="grid gap-3 sm:grid-cols-2">
         {sources.data.items.map((source) => (
-          <Link className="surface-panel group transition-colors hover:border-amber-200/20" key={source.id} to={`/rates/${source.id}`}>
+          <Link className="surface-panel group transition-colors hover:border-[var(--nm-accent)]" key={source.id} to={`/rates/${source.id}`}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="eyebrow">Ручной источник</p>
-                <h2 className="mt-2 text-2xl font-semibold text-stone-100">В {source.target_currency}</h2>
-                <p className="mt-2 text-sm text-stone-500">Опубликована версия {String(source.latest_version)}</p>
+                <h2 className="mt-2 text-2xl font-semibold text-[var(--nm-text)]">В {source.target_currency}</h2>
+                <p className="mt-2 text-sm text-[var(--nm-muted)]">Опубликована версия {String(source.latest_version)}</p>
               </div>
-              <span aria-hidden="true" className="text-xl text-stone-600 transition-colors group-hover:text-amber-200">›</span>
+              <span aria-hidden="true" className="text-xl text-[var(--nm-muted)] transition-colors group-hover:text-[var(--nm-accent)]">›</span>
             </div>
           </Link>
         ))}
@@ -42,11 +42,11 @@ export function ExchangeRatesPage() {
     );
   })();
   return (
-    <div className="page-stack">
+    <div className="exchange-rates-page page-stack">
       <PageHeading
         action={<Link className="button button--primary" to="/rates/new">Новый</Link>}
-        description="Версионные ручные источники для воспроизводимых отчётов. Автоматических обратных и составных курсов нет."
-        eyebrow="Immutable snapshots"
+        description="Храните ручные курсы отдельными версиями, чтобы старые отчёты не менялись. Обратные и составные курсы не рассчитываются."
+        eyebrow="Сохранённые версии"
         title="Курсы валют"
       />
       <section aria-live="polite">{content}</section>

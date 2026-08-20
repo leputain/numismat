@@ -1,5 +1,7 @@
 import { Link, useLocation } from "react-router";
 
+import { AppIcon } from "../../shared/components/app-icon";
+
 type NavigationKey = "overview" | "transactions" | "create" | "analytics" | "more";
 
 const NAVIGATION = [
@@ -32,46 +34,6 @@ function isActiveNavigation(key: NavigationKey, pathname: string): boolean {
   );
 }
 
-function NavigationIcon({ name }: { readonly name: NavigationKey }) {
-  if (name === "create") {
-    return (
-      <svg aria-hidden="true" viewBox="0 0 24 24">
-        <path d="M12 5v14M5 12h14" />
-      </svg>
-    );
-  }
-  if (name === "overview") {
-    return (
-      <svg aria-hidden="true" viewBox="0 0 24 24">
-        <path d="M4 11.5 12 5l8 6.5V20h-5v-5H9v5H4z" />
-      </svg>
-    );
-  }
-  if (name === "transactions") {
-    return (
-      <svg aria-hidden="true" viewBox="0 0 24 24">
-        <path d="M6 7h12M6 12h12M6 17h8" />
-        <path d="m16 15 3 2-3 2" />
-      </svg>
-    );
-  }
-  if (name === "analytics") {
-    return (
-      <svg aria-hidden="true" viewBox="0 0 24 24">
-        <path d="M5 19V9M12 19V5M19 19v-7" />
-      </svg>
-    );
-  }
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <circle cx="7" cy="7" r="1.5" />
-      <circle cx="17" cy="7" r="1.5" />
-      <circle cx="7" cy="17" r="1.5" />
-      <circle cx="17" cy="17" r="1.5" />
-    </svg>
-  );
-}
-
 export function PrimaryNavigation() {
   const { pathname } = useLocation();
   return (
@@ -90,7 +52,7 @@ export function PrimaryNavigation() {
               to={item.to}
             >
               <span className="primary-navigation__icon">
-                <NavigationIcon name={item.key} />
+                <AppIcon name={item.key === "create" ? "add" : item.key} />
               </span>
               <span className="primary-navigation__label">{item.label}</span>
             </Link>

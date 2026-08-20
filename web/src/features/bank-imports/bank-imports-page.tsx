@@ -120,10 +120,10 @@ export function BankImportsPage() {
   const batches = feed.data?.pages.flatMap((page) => page.items) ?? [];
   const accountNames = new Map(accounts.data?.items.map((item) => [item.id, item.name]));
   return (
-    <div className="page-stack">
+    <div className="bank-imports-page page-stack">
       <PageHeading
-        description="CSV остаётся локальным: сервер хранит только нормализованные строки и keyed-отпечатки. Ни одна операция не создаётся автоматически."
-        eyebrow="Review-first сверка"
+        description="Файл обрабатывается локально и не хранится целиком. Каждая строка требует вашего решения."
+        eyebrow="Проверка перед сохранением"
         title="Банковский импорт"
       />
 
@@ -175,8 +175,8 @@ export function BankImportsPage() {
               ref={inputRef}
               type="file"
             />
-            <p className="text-xs text-stone-500">Имя файла не отправляется отдельно и не сохраняется.</p>
-            {localError === undefined ? null : <p className="text-sm text-[#df9a94]" role="alert">{localError}</p>}
+            <p className="text-xs text-[var(--nm-muted)]">Имя файла не отправляется отдельно и не сохраняется.</p>
+            {localError === undefined ? null : <p className="text-sm text-[var(--nm-danger)]" role="alert">{localError}</p>}
             <button
               className="button button--primary"
               disabled={upload.isPending || upload.outcomeUnknown || selectedFile === undefined}
@@ -208,15 +208,15 @@ export function BankImportsPage() {
           <>
             <div className="space-y-3">
               {batches.map((batch) => (
-                <Link className="surface-panel block transition-colors hover:border-amber-200/20" key={batch.id} to={`/imports/${batch.id}`}>
+                <Link className="surface-panel block transition-colors hover:border-[var(--nm-accent)]" key={batch.id} to={`/imports/${batch.id}`}>
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <p className="font-semibold text-stone-100">{accountNames.get(batch.account_id) ?? "Счёт"}</p>
-                      <p className="mt-1 text-sm text-stone-500">{new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(batch.created_at))}</p>
+                      <p className="font-semibold text-[var(--nm-text)]">{accountNames.get(batch.account_id) ?? "Счёт"}</p>
+                      <p className="mt-1 text-sm text-[var(--nm-muted)]">{new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(batch.created_at))}</p>
                     </div>
                     <span className="revision-chip">{batchStateLabel(batch.state)}</span>
                   </div>
-                  <p className="mt-4 text-sm text-stone-400">Всего {batch.counts.total} · ждут решения {batch.counts.pending + batch.counts.staged}</p>
+                  <p className="mt-4 text-sm text-[var(--nm-muted)]">Всего {batch.counts.total} · ждут решения {batch.counts.pending + batch.counts.staged}</p>
                 </Link>
               ))}
             </div>

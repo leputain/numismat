@@ -127,7 +127,7 @@ function PublishForm({ source, knownSources }: {
       return;
     }
     if (normalizedEntries.some((entry) => !RATE_PATTERN.test(entry.rate) || ZERO_RATE_PATTERN.test(entry.rate))) {
-      setFormError("Курс должен быть положительной ASCII-десятичной строкой: до 6 знаков до точки и до 12 после.");
+      setFormError("Курс должен быть положительным числом: до 6 знаков до точки и до 12 после.");
       return;
     }
     setFormError(undefined);
@@ -181,12 +181,12 @@ function PublishForm({ source, knownSources }: {
         <div className="flex items-end justify-between gap-3">
           <div>
             <p className="field-label">Прямые курсы</p>
-            <p className="mt-1 text-xs leading-relaxed text-stone-500">Сколько единиц целевой валюты приходится на одну единицу исходной.</p>
+            <p className="mt-1 text-xs leading-relaxed text-[var(--nm-muted)]">Сколько единиц целевой валюты приходится на одну единицу исходной.</p>
           </div>
           <button className="button button--ghost" disabled={entries.length >= MAX_ENTRIES || mutation.isPending} onClick={addEntry} type="button">Добавить</button>
         </div>
         {entries.map((entry, index) => (
-          <div className="grid gap-3 rounded-2xl border border-white/8 bg-white/[0.025] p-4 sm:grid-cols-[8rem_1fr_auto]" key={entry.id}>
+          <div className="grid gap-3 rounded-2xl border border-[var(--nm-line)] bg-[var(--nm-surface)] p-4 sm:grid-cols-[8rem_1fr_auto]" key={entry.id}>
             <div className="field-stack">
               <label className="field-label" htmlFor={`rate-source-${String(entry.id)}`}>Валюта {String(index + 1)}</label>
               <input autoCapitalize="characters" autoComplete="off" className="field-input uppercase" disabled={mutation.isPending} id={`rate-source-${String(entry.id)}`} maxLength={3} onChange={(event) => updateEntry(entry.id, { sourceCurrency: event.currentTarget.value.toUpperCase() })} required type="text" value={entry.sourceCurrency} />
@@ -200,13 +200,13 @@ function PublishForm({ source, knownSources }: {
         ))}
       </div>
 
-      {formError === undefined ? null : <p aria-live="polite" className="text-sm text-[#df9a94]" role="alert">{formError}</p>}
+      {formError === undefined ? null : <p aria-live="polite" className="text-sm text-[var(--nm-danger)]" role="alert">{formError}</p>}
       <MutationFeedback error={mutation.error} onRetryUnknown={mutation.retryUnknown} outcomeUnknown={mutation.outcomeUnknown} pending={mutation.isPending} />
       <div className="flex flex-wrap gap-3 pt-2">
         <button className="button button--primary" disabled={mutation.isPending} type="submit">{mutation.isPending ? "Публикуем…" : "Опубликовать версию"}</button>
         <Link className="button button--secondary" to={source === undefined ? "/rates" : `/rates/${source.id}`}>Отмена</Link>
       </div>
-      <p className="text-xs leading-relaxed text-stone-500">После публикации версия неизменяема. Обратные и составные курсы не вычисляются: для каждой валюты нужен прямой курс.</p>
+      <p className="text-xs leading-relaxed text-[var(--nm-muted)]">После публикации версия не меняется. Обратные и составные курсы не вычисляются: для каждой валюты нужен прямой курс.</p>
     </form>
   );
 }
@@ -224,10 +224,10 @@ export function ExchangeRatePublishPage({ sourceId }: { readonly sourceId?: stri
     return <ErrorState actionLabel="К источникам" description="Источник недоступен или был удалён." onAction={() => window.location.assign("/rates")} title="Источник не найден" />;
   }
   return (
-    <div className="page-stack">
+    <div className="exchange-rate-publish-page page-stack">
       <PageHeading
-        description="Публикация создаёт новый immutable snapshot; прежние отчёты остаются воспроизводимыми."
-        eyebrow={source === undefined ? "Новый ручной источник" : `Следующая версия после v${String(source.latest_version)}`}
+        description="Публикация сохраняет новую версию. Прежние отчёты остаются без изменений."
+        eyebrow={source === undefined ? "Новый ручной источник" : `Следующая версия после ${String(source.latest_version)}`}
         title={source === undefined ? "Добавить курсы" : `Курсы в ${source.target_currency}`}
       />
       <PublishForm key={source?.id ?? "new"} knownSources={sources.data?.items ?? []} source={source} />

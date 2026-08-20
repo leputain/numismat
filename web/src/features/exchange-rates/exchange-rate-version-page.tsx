@@ -49,12 +49,12 @@ function ConvertedTotals({ value }: { readonly value: ConvertedPeriodResponse })
       </div>
       <div>
         <p className="eyebrow">Исходные итоги</p>
-        {value.original_totals.length === 0 ? <p className="mt-2 text-sm text-stone-500">За период движений нет.</p> : (
+        {value.original_totals.length === 0 ? <p className="mt-2 text-sm text-[var(--nm-muted)]">За период движений нет.</p> : (
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             {value.original_totals.map((total) => (
-              <dl className="rounded-2xl border border-white/8 bg-white/[0.025] p-4 text-sm" key={total.currency}>
-                <div className="flex items-center justify-between gap-3"><dt className="text-stone-500">Доход · {total.currency}</dt><dd className="text-stone-200">{formatMoney(total.income_minor, total.currency, locale)}</dd></div>
-                <div className="mt-2 flex items-center justify-between gap-3"><dt className="text-stone-500">Расход · {total.currency}</dt><dd className="text-stone-200">{formatMoney(total.expense_minor, total.currency, locale)}</dd></div>
+              <dl className="rounded-2xl border border-[var(--nm-line)] bg-[var(--nm-surface)] p-4 text-sm" key={total.currency}>
+                <div className="flex items-center justify-between gap-3"><dt className="text-[var(--nm-muted)]">Доход · {total.currency}</dt><dd className="text-[var(--nm-text)]">{formatMoney(total.income_minor, total.currency, locale)}</dd></div>
+                <div className="mt-2 flex items-center justify-between gap-3"><dt className="text-[var(--nm-muted)]">Расход · {total.currency}</dt><dd className="text-[var(--nm-text)]">{formatMoney(total.expense_minor, total.currency, locale)}</dd></div>
               </dl>
             ))}
           </div>
@@ -106,38 +106,38 @@ export function ExchangeRateVersionPage({ versionId }: { readonly versionId: str
   if (version.isError) return <ErrorState onAction={() => void version.refetch()} />;
   const value = version.data;
   return (
-    <div className="page-stack">
+    <div className="exchange-rate-version-page page-stack">
       <PageHeading
         description={`Действует с ${formatTransactionDate(value.effective_at, locale, timeZone)}. Создана ${formatTransactionDate(value.created_at, locale, timeZone)}.`}
-        eyebrow={`Неизменяемая версия ${String(value.version)}`}
+        eyebrow={`Сохранённая версия ${String(value.version)}`}
         title={`Курсы в ${value.target_currency}`}
       />
       <section className="surface-panel">
         <div className="section-heading section-heading--inside">
           <div><p className="eyebrow">Прямые курсы</p><h2 className="section-title">Состав версии</h2></div>
         </div>
-        <div className="divide-y divide-white/8">
+        <div className="divide-y divide-[var(--nm-line)]">
           {value.entries.map((entry) => (
             <div className="flex items-center justify-between gap-4 py-3 text-sm" key={entry.source_currency}>
-              <span className="text-stone-400">1 {entry.source_currency}</span>
-              <span className="font-medium text-stone-100">{entry.rate} {entry.target_currency}</span>
+              <span className="text-[var(--nm-muted)]">1 {entry.source_currency}</span>
+              <span className="font-medium text-[var(--nm-text)]">{entry.rate} {entry.target_currency}</span>
             </div>
           ))}
         </div>
-        <p className="mt-4 text-xs leading-relaxed text-stone-500">Значения показаны как точные десятичные строки. Обратные и составные курсы не рассчитываются.</p>
+        <p className="mt-4 text-xs leading-relaxed text-[var(--nm-muted)]">Курсы сохранены без округления. Обратные и составные курсы не рассчитываются.</p>
       </section>
 
       <section className="surface-panel space-y-5">
         <div>
-          <p className="eyebrow">Pinned valuation</p>
-          <h2 className="mt-2 text-xl font-semibold text-stone-100">Пересчитать период по этой версии</h2>
-          <p className="mt-2 text-sm leading-relaxed text-stone-500">Начало включается, конец не включается. Исходные операции не изменяются.</p>
+          <p className="eyebrow">Расчёт по выбранной версии</p>
+          <h2 className="section-title">Пересчитать период</h2>
+          <p className="mt-2 text-sm leading-relaxed text-[var(--nm-muted)]">Начальная дата входит в период, конечная — нет. Исходные операции не изменяются.</p>
         </div>
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={(event) => { event.preventDefault(); submitPeriod(); }}>
           <div className="field-stack"><label className="field-label" htmlFor="converted-start">Начало</label><input className="field-input" id="converted-start" onChange={(event) => setStartInput(event.currentTarget.value)} required step={60} type="datetime-local" value={startInput} /></div>
           <div className="field-stack"><label className="field-label" htmlFor="converted-end">Конец, не включая</label><input className="field-input" id="converted-end" onChange={(event) => setEndInput(event.currentTarget.value)} required step={60} type="datetime-local" value={endInput} /></div>
           <div className="sm:col-span-2">
-            {formError === undefined ? null : <p aria-live="polite" className="mb-3 text-sm text-[#df9a94]" role="alert">{formError}</p>}
+            {formError === undefined ? null : <p aria-live="polite" className="mb-3 text-sm text-[var(--nm-danger)]" role="alert">{formError}</p>}
             <button className="button button--primary" disabled={converted.isFetching} type="submit">{converted.isFetching ? "Считаем…" : "Рассчитать"}</button>
           </div>
         </form>

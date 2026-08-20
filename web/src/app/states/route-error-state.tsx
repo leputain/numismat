@@ -10,12 +10,13 @@ export function RouteErrorState({
   description = "Этот адрес не относится к доступным разделам Numismat.",
 }: RouteErrorStateProps) {
   return (
-    <section className="mx-auto grid max-w-md place-items-center py-20 text-center" role="alert">
-      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Ошибка маршрута</p>
-      <h1 className="mt-3 font-serif text-3xl text-stone-50">{title}</h1>
-      <p className="mt-4 text-sm leading-6 text-stone-400">{description}</p>
+    <section className="route-state" role="alert">
+      <span aria-hidden="true" className="route-state__mark">404</span>
+      <p className="eyebrow">Здесь ничего нет</p>
+      <h1>{title}</h1>
+      <p>{description}</p>
       <Link
-        className="mt-6 grid min-h-11 min-w-44 place-items-center rounded-2xl border border-white/12 bg-white/7 px-5 text-sm font-semibold text-stone-100 outline-none focus-visible:ring-2 focus-visible:ring-amber-200"
+        className="button button--secondary route-state__action"
         to="/"
       >
         На главную

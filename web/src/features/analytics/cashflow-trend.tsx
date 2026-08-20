@@ -77,7 +77,7 @@ function CashflowChart({
       <div className="cashflow-legend" aria-label="Обозначения графика">
         <span><i className="cashflow-legend__income" />Доходы</span>
         <span><i className="cashflow-legend__expense" />Расходы</span>
-        <span><i className="cashflow-legend__net" />Итог</span>
+        <span><i className="cashflow-legend__net" />Итог дня</span>
       </div>
       <svg
         aria-labelledby="cashflow-chart-title cashflow-chart-description"
@@ -85,9 +85,9 @@ function CashflowChart({
         role="img"
         viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
       >
-        <title id="cashflow-chart-title">Денежный поток по дням, {currency}</title>
+        <title id="cashflow-chart-title">Доходы и расходы по дням, {currency}</title>
         <desc id="cashflow-chart-description">
-          Доходы направлены вверх от нулевой линии, расходы вниз, линия показывает итог дня.
+          Доходы направлены вверх от нулевой линии, расходы вниз, а линия показывает разницу за день.
           Точные значения доступны в таблице под графиком.
         </desc>
         <line className="cashflow-chart__grid" x1={PLOT_LEFT} x2={PLOT_RIGHT} y1={ZERO_Y - 41} y2={ZERO_Y - 41} />
@@ -165,7 +165,7 @@ function CashflowTable({
       <summary>Точные значения по дням</summary>
       <div className="cashflow-table-scroll">
         <table className="cashflow-table">
-          <caption className="sr-only">Денежный поток по дням в валюте {currency}</caption>
+          <caption className="sr-only">Доходы и расходы по дням в валюте {currency}</caption>
           <thead>
             <tr>
               <th scope="col">Дата</th>
@@ -251,7 +251,7 @@ function CashflowContent({ response }: { readonly response: TimeSeriesResponse }
               <strong className="money-expense">{formatMoney(summary.expenseMinor.toString(), selectedCurrency, locale)}</strong>
             </div>
             <div>
-              <span>Итог</span>
+              <span>Итог периода</span>
               <strong>{formatMoney(summary.netMinor.toString(), selectedCurrency, locale)}</strong>
             </div>
           </div>
@@ -289,11 +289,14 @@ export function CashflowTrend({ start, end }: { readonly start: string; readonly
   });
 
   return (
-    <section aria-labelledby="cashflow-title" className="surface-panel surface-panel--roomy">
+    <section
+      aria-labelledby="cashflow-title"
+      className="surface-panel surface-panel--roomy cashflow-section"
+    >
       <div className="section-heading section-heading--inside">
         <div>
-          <p className="eyebrow">По дням</p>
-          <h2 className="section-title" id="cashflow-title">Денежный поток</h2>
+          <p className="eyebrow">Движение внутри месяца</p>
+          <h2 className="section-title" id="cashflow-title">Доходы и расходы по дням</h2>
         </div>
         <span className="period-caption">Текущий месяц</span>
       </div>

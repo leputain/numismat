@@ -41,7 +41,7 @@ export function ExchangeRateSourcePage({ sourceId }: { readonly sourceId: string
   }
   const items = versions.data?.pages.flatMap((page) => page.items) ?? [];
   return (
-    <div className="page-stack">
+    <div className="exchange-rate-source-page page-stack">
       <PageHeading
         action={<Link className="button button--primary" to={`/rates/${source.id}/publish`}>Новая версия</Link>}
         description="Каждая публикация сохраняется отдельно; существующие версии не редактируются."
@@ -50,14 +50,14 @@ export function ExchangeRateSourcePage({ sourceId }: { readonly sourceId: string
       />
       <section aria-live="polite" className="space-y-3">
         {versions.isPending ? <PageSkeleton rows={4} /> : versions.isError ? <ErrorState onAction={() => void versions.refetch()} /> : items.length === 0 ? <EmptyState title="Версий пока нет">Опубликуйте первый набор курсов.</EmptyState> : items.map((version) => (
-          <Link className="block rounded-2xl border border-white/8 bg-white/[0.025] p-4 transition-colors hover:border-amber-200/20" key={version.id} to={`/rates/versions/${version.id}`}>
+          <Link className="surface-panel block transition-colors hover:border-[var(--nm-accent)]" key={version.id} to={`/rates/versions/${version.id}`}>
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="font-semibold text-stone-100">Версия {String(version.version)}</p>
-                <p className="mt-1 text-sm text-stone-400">Действует с {formatTransactionDate(version.effective_at, locale, timeZone)}</p>
-                <p className="mt-1 text-xs text-stone-600">Опубликована {formatTransactionDate(version.created_at, locale, timeZone)}</p>
+                <p className="font-semibold text-[var(--nm-text)]">Версия {String(version.version)}</p>
+                <p className="mt-1 text-sm text-[var(--nm-muted)]">Действует с {formatTransactionDate(version.effective_at, locale, timeZone)}</p>
+                <p className="mt-1 text-xs text-[var(--nm-muted)]">Опубликована {formatTransactionDate(version.created_at, locale, timeZone)}</p>
               </div>
-              <span aria-hidden="true" className="text-stone-600">›</span>
+              <span aria-hidden="true" className="text-[var(--nm-muted)]">›</span>
             </div>
           </Link>
         ))}

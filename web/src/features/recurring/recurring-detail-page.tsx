@@ -48,13 +48,13 @@ function InstanceRow({ instance, run, pending }: {
   readonly pending: boolean;
 }) {
   return (
-    <article className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+    <article className="surface-panel">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="font-medium text-stone-200">{formatNominalLocal(instance.nominal_local)}</p>
-          <p className="mt-1 text-xs text-stone-500">
+          <p className="font-medium text-[var(--nm-text)]">{formatNominalLocal(instance.nominal_local)}</p>
+          <p className="mt-1 text-xs text-[var(--nm-muted)]">
             {recurringOutcomeLabel(instance.outcome)}
-            {instance.dst_adjusted ? " · время сдвинуто из DST-разрыва" : ""}
+            {instance.dst_adjusted ? " · время перенесено вперёд из-за перевода часов" : ""}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -141,25 +141,25 @@ export function RecurringDetailPage({ scheduleId }: { readonly scheduleId: strin
   const instanceItems = instances.data?.pages.flatMap((page) => page.items) ?? [];
 
   return (
-    <div className="page-stack">
+    <div className="recurring-detail-page page-stack">
       <PageHeading
         action={value.state === "deleted" ? undefined : <Link className="button button--secondary" to={`/recurring/${value.id}/edit`}>Изменить</Link>}
-        description="Часовой пояс зафиксирован при создании и не меняется вместе с настройками владельца."
+        description="Часовой пояс выбирается при создании расписания и не меняется автоматически."
         eyebrow={recurringStateLabel(value.state)}
         title={value.name}
       />
       <section className="surface-panel">
         <div className="grid gap-5 sm:grid-cols-2">
-          <div><p className="eyebrow">Сумма</p><p className="mt-2 text-2xl font-semibold text-stone-100">{formatMoney(value.amount_minor, value.currency, locale)}</p></div>
-          <div><p className="eyebrow">Следующий черновик</p><p className="mt-2 text-lg font-semibold text-stone-100">{formatNominalLocal(value.next_due_local, locale)}</p></div>
+          <div><p className="eyebrow">Сумма</p><p className="mt-2 text-2xl font-semibold text-[var(--nm-text)]">{formatMoney(value.amount_minor, value.currency, locale)}</p></div>
+          <div><p className="eyebrow">Следующий черновик</p><p className="mt-2 text-lg font-semibold text-[var(--nm-text)]">{formatNominalLocal(value.next_due_local, locale)}</p></div>
         </div>
         <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-2">
-          <div><dt className="text-stone-500">Правило</dt><dd className="mt-1 text-stone-200">{recurringCadenceLabel(value)}</dd></div>
-          <div><dt className="text-stone-500">Локальное время</dt><dd className="mt-1 text-stone-200">{value.local_time} · {value.timezone}</dd></div>
-          <div><dt className="text-stone-500">Тип</dt><dd className="mt-1 text-stone-200">{value.kind === "expense" ? "Расход" : "Доход"}</dd></div>
-          <div><dt className="text-stone-500">До даты</dt><dd className="mt-1 text-stone-200">{value.ends_on ?? "Без ограничения"}</dd></div>
+          <div><dt className="text-[var(--nm-muted)]">Правило</dt><dd className="mt-1 text-[var(--nm-text)]">{recurringCadenceLabel(value)}</dd></div>
+          <div><dt className="text-[var(--nm-muted)]">Локальное время</dt><dd className="mt-1 text-[var(--nm-text)]">{value.local_time} · {value.timezone}</dd></div>
+          <div><dt className="text-[var(--nm-muted)]">Тип</dt><dd className="mt-1 text-[var(--nm-text)]">{value.kind === "expense" ? "Расход" : "Доход"}</dd></div>
+          <div><dt className="text-[var(--nm-muted)]">До даты</dt><dd className="mt-1 text-[var(--nm-text)]">{value.ends_on ?? "Без ограничения"}</dd></div>
         </dl>
-        {value.description.length === 0 ? null : <p className="mt-6 text-sm leading-relaxed text-stone-400">{value.description}</p>}
+        {value.description.length === 0 ? null : <p className="mt-6 text-sm leading-relaxed text-[var(--nm-muted)]">{value.description}</p>}
       </section>
 
       <MutationFeedback error={lifecycle.error} onRetryUnknown={lifecycle.retryUnknown} outcomeUnknown={lifecycle.outcomeUnknown} pending={lifecycle.isPending} />
@@ -171,9 +171,9 @@ export function RecurringDetailPage({ scheduleId }: { readonly scheduleId: strin
       </div>
 
       <section className="space-y-3" aria-live="polite">
-        <h2 className="text-lg font-semibold text-stone-100">Экземпляры</h2>
+        <h2 className="section-title">История запусков</h2>
         <MutationFeedback error={instanceMutation.error} onRetryUnknown={instanceMutation.retryUnknown} outcomeUnknown={instanceMutation.outcomeUnknown} pending={instanceMutation.isPending} />
-        {instances.isPending ? <PageSkeleton rows={3} /> : instances.isError ? <ErrorState onAction={() => void instances.refetch()} /> : instanceItems.length === 0 ? <p className="text-sm text-stone-500">Runner ещё не сформировал ни одного due-экземпляра.</p> : instanceItems.map((instance) => <InstanceRow instance={instance} key={instance.id} pending={instanceMutation.isPending} run={runInstance} />)}
+        {instances.isPending ? <PageSkeleton rows={3} /> : instances.isError ? <ErrorState onAction={() => void instances.refetch()} /> : instanceItems.length === 0 ? <p className="text-sm text-[var(--nm-muted)]">По этому расписанию ещё не было запусков.</p> : instanceItems.map((instance) => <InstanceRow instance={instance} key={instance.id} pending={instanceMutation.isPending} run={runInstance} />)}
         {instances.hasNextPage ? <button className="button button--secondary" disabled={instances.isFetchingNextPage} onClick={() => void instances.fetchNextPage()} type="button">{instances.isFetchingNextPage ? "Загружаем…" : "Показать ещё"}</button> : null}
       </section>
     </div>

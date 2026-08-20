@@ -92,7 +92,7 @@ function BankImportRowCard({ batch, row }: { readonly batch: BankImportBatch; re
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="eyebrow">Строка {row.position}</p>
-          <p className={`mt-2 text-xl font-semibold ${row.type === "expense" ? "text-[#e6a18b]" : "text-[#82c6ae]"}`}>
+          <p className={`mt-2 text-xl font-semibold ${row.type === "expense" ? "money-expense" : "money-income"}`}>
             {formatTransactionMoney(row.amount_minor, row.currency, row.type, locale)}
           </p>
         </div>
@@ -102,7 +102,7 @@ function BankImportRowCard({ batch, row }: { readonly batch: BankImportBatch; re
         <div><dt>Дата</dt><dd>{formatTransactionDate(row.occurred_at, locale, timeZone)}</dd></div>
         <div><dt>Описание</dt><dd>{row.description || "Без описания"}</dd></div>
       </dl>
-      {row.possible_duplicate ? <p className="notice notice--warning text-sm">В этом счёте уже есть строка с тем же защищённым reference или отпечатком. Решение остаётся за вами.</p> : null}
+      {row.possible_duplicate ? <p className="notice notice--warning text-sm">Похожая строка уже встречалась на этом счёте. Проверьте данные и выберите действие.</p> : null}
       {row.outcome === "awaiting_review" ? <Link className="button button--primary w-full" to="/draft">Открыть черновик</Link> : null}
       {actionable ? (
         <div className="space-y-3">
@@ -115,13 +115,13 @@ function BankImportRowCard({ batch, row }: { readonly batch: BankImportBatch; re
             candidates.isPending ? <PageSkeleton rows={2} /> : candidates.isError ? (
               <ErrorState onAction={() => void candidates.refetch()} />
             ) : candidates.data.items.length === 0 ? (
-              <p className="text-sm text-stone-500">Точных кандидатов в окне ±3 дня нет.</p>
+              <p className="text-sm text-[var(--nm-muted)]">Похожих операций за три дня до и после этой даты нет.</p>
             ) : (
               <div className="space-y-2">
                 {candidates.data.items.map((candidate) => (
-                  <div className="rounded-2xl border border-white/8 bg-black/10 p-4" key={candidate.transaction.id}>
-                    <p className="font-medium text-stone-200">#{candidate.rank} · {candidate.transaction.category.name}</p>
-                    <p className="mt-1 text-sm text-stone-500">{formatTransactionDate(candidate.transaction.occurred_at, locale, timeZone)}</p>
+                  <div className="rounded-2xl border border-[var(--nm-line)] bg-[var(--nm-canvas)] p-4" key={candidate.transaction.id}>
+                    <p className="font-medium text-[var(--nm-text)]">Совпадение {candidate.rank} · {candidate.transaction.category.name}</p>
+                    <p className="mt-1 text-sm text-[var(--nm-muted)]">{formatTransactionDate(candidate.transaction.occurred_at, locale, timeZone)}</p>
                     <button className="button button--secondary mt-3" disabled={disabled} onClick={() => mutation.run({ path: `/api/v1/bank-imports/${batch.id}/rows/${row.id}/link`, body: { ...baseBody, transaction_id: candidate.transaction.id, transaction_version: candidate.transaction.version }, context: "link" })} type="button">Связать с этой операцией</button>
                   </div>
                 ))}
@@ -159,19 +159,19 @@ export function BankImportDetailPage({ batchId }: { readonly batchId: string }) 
   if (batch.isError || rows.isError) return <ErrorState onAction={() => void restartBankImportPagination(queryClient)} />;
   const items = rows.data.pages.flatMap((page) => page.items);
   return (
-    <div className="page-stack">
+    <div className="bank-import-detail-page page-stack">
       <PageHeading
-        action={<span className="revision-chip">Ревизия {batch.data.version}</span>}
-        description="Каждая строка требует явного решения: черновик, связь с точным кандидатом или пропуск. Автоматической сверки нет."
+        action={<span className="revision-chip">Версия {batch.data.version}</span>}
+        description="Для каждой строки выберите действие: создать черновик, связать с существующей операцией или пропустить."
         eyebrow="Банковский пакет"
         title={`Сверка · ${batch.data.counts.total} строк`}
       />
       <section className="surface-panel">
         <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
-          <div><p className="text-stone-500">Ожидают</p><p className="mt-1 text-xl font-semibold">{batch.data.counts.pending + batch.data.counts.staged}</p></div>
-          <div><p className="text-stone-500">Подтверждены</p><p className="mt-1 text-xl font-semibold">{batch.data.counts.confirmed}</p></div>
-          <div><p className="text-stone-500">Связаны</p><p className="mt-1 text-xl font-semibold">{batch.data.counts.linked}</p></div>
-          <div><p className="text-stone-500">Пропущены</p><p className="mt-1 text-xl font-semibold">{batch.data.counts.skipped}</p></div>
+          <div><p className="text-[var(--nm-muted)]">Ожидают</p><p className="mt-1 text-xl font-semibold">{batch.data.counts.pending + batch.data.counts.staged}</p></div>
+          <div><p className="text-[var(--nm-muted)]">Подтверждены</p><p className="mt-1 text-xl font-semibold">{batch.data.counts.confirmed}</p></div>
+          <div><p className="text-[var(--nm-muted)]">Связаны</p><p className="mt-1 text-xl font-semibold">{batch.data.counts.linked}</p></div>
+          <div><p className="text-[var(--nm-muted)]">Пропущены</p><p className="mt-1 text-xl font-semibold">{batch.data.counts.skipped}</p></div>
         </div>
         {batch.data.state === "open" ? (
           <button className="button button--danger-ghost mt-5" disabled={cancel.isPending || cancel.outcomeUnknown} onClick={() => cancel.run({ path: `/api/v1/bank-imports/${batch.data.id}/cancel`, body: { version: batch.data.version }, context: undefined })} type="button">Отменить неразобранные строки</button>

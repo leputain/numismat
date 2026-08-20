@@ -215,7 +215,7 @@ function BudgetForm({ initial }: BudgetFormProps) {
       </div>
 
       {formError === undefined ? null : (
-        <p aria-live="polite" className="text-sm text-[#df9a94]" role="alert">{formError}</p>
+        <p aria-live="polite" className="text-sm text-[var(--nm-danger)]" role="alert">{formError}</p>
       )}
       <MutationFeedback
         error={mutation.error}
@@ -234,8 +234,8 @@ function BudgetForm({ initial }: BudgetFormProps) {
           Отмена
         </Link>
       </div>
-      <p className="text-xs leading-relaxed text-stone-500">
-        Часовой пояс фиксируется сервером при создании. Суммы в разных валютах не смешиваются.
+      <p className="text-xs leading-relaxed text-[var(--nm-muted)]">
+        Даты считаются в часовом поясе, выбранном при создании бюджета. Суммы в разных валютах не объединяются.
       </p>
     </form>
   );
@@ -272,10 +272,10 @@ export function BudgetEditorPage({ budgetId }: { readonly budgetId?: string }) {
   }
 
   return (
-    <div className="page-stack">
+    <div className="budget-editor-page page-stack">
       <PageHeading
         description="Период задаётся локальными календарными датами, окончание включено."
-        eyebrow={budgetId === undefined ? "Новый лимит" : "Версионное изменение"}
+        eyebrow={budgetId === undefined ? "Новый лимит" : "Изменение бюджета"}
         title={budgetId === undefined ? "Создать бюджет" : "Изменить бюджет"}
       />
       <BudgetForm initial={budget.data} key={budget.data?.id ?? "new"} />

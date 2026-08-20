@@ -65,7 +65,7 @@ export function BudgetDetailPage({ budgetId }: { readonly budgetId: string }) {
   };
 
   return (
-    <div className="page-stack">
+    <div className="budget-detail-page page-stack">
       <PageHeading
         action={
           deleted ? undefined : (
@@ -83,27 +83,27 @@ export function BudgetDetailPage({ budgetId }: { readonly budgetId: string }) {
         <div className="grid gap-5 sm:grid-cols-2">
           <div>
             <p className="eyebrow">Лимит</p>
-            <p className="mt-2 text-2xl font-semibold text-stone-100">
+            <p className="mt-2 text-2xl font-semibold text-[var(--nm-text)]">
               {formatMoney(value.limit_minor, value.currency, locale)}
             </p>
           </div>
           <div>
             <p className="eyebrow">Потрачено</p>
-            <p className="mt-2 text-2xl font-semibold text-stone-100">
+            <p className="mt-2 text-2xl font-semibold text-[var(--nm-text)]">
               {formatMoney(progress.spent_minor, value.currency, locale)}
             </p>
           </div>
         </div>
-        <div className="mt-6 h-3 overflow-hidden rounded-full bg-white/8">
+        <div className="mt-6 h-3 overflow-hidden rounded-full bg-[var(--nm-line)]">
           <span
-            className={`block h-full rounded-full ${overspent ? "bg-[#c97970]" : "bg-amber-200"}`}
+            className={`block h-full rounded-full ${overspent ? "bg-[var(--nm-danger)]" : "bg-[var(--nm-accent)]"}`}
             style={{ width: `${String(Math.floor(progress.progress_bps / 100))}%` }}
           />
         </div>
         <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-2">
           <div>
-            <dt className="text-stone-500">{overspent ? "Перерасход" : "Осталось"}</dt>
-            <dd className={overspent ? "mt-1 font-medium text-[#df9a94]" : "mt-1 font-medium text-stone-200"}>
+            <dt className="text-[var(--nm-muted)]">{overspent ? "Перерасход" : "Осталось"}</dt>
+            <dd className={overspent ? "mt-1 font-medium text-[var(--nm-danger)]" : "mt-1 font-medium text-[var(--nm-text)]"}>
               {formatMoney(
                 overspent ? progress.overspent_minor : progress.remaining_minor,
                 value.currency,
@@ -112,18 +112,18 @@ export function BudgetDetailPage({ budgetId }: { readonly budgetId: string }) {
             </dd>
           </div>
           <div>
-            <dt className="text-stone-500">Охват</dt>
-            <dd className="mt-1 font-medium text-stone-200">
+            <dt className="text-[var(--nm-muted)]">Охват</dt>
+            <dd className="mt-1 font-medium text-[var(--nm-text)]">
               {value.category_id === null ? "Все расходы" : "Одна категория расходов"}
             </dd>
           </div>
           <div>
-            <dt className="text-stone-500">Валюта</dt>
-            <dd className="mt-1 font-medium text-stone-200">{value.currency}</dd>
+            <dt className="text-[var(--nm-muted)]">Валюта</dt>
+            <dd className="mt-1 font-medium text-[var(--nm-text)]">{value.currency}</dd>
           </div>
           <div>
-            <dt className="text-stone-500">Часовой пояс периода</dt>
-            <dd className="mt-1 font-medium text-stone-200">{value.timezone}</dd>
+            <dt className="text-[var(--nm-muted)]">Часовой пояс периода</dt>
+            <dd className="mt-1 font-medium text-[var(--nm-text)]">{value.timezone}</dd>
           </div>
         </dl>
       </section>
