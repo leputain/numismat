@@ -265,6 +265,20 @@ def test_batch_never_collapses_one_resolved_and_one_unresolved_integer_row() -> 
         )
 
 
+def test_receipt_fallback_rejects_multi_amount_statement_without_total_marker() -> None:
+    with pytest.raises(OcrImportError, match="найдено несколько сумм"):
+        parse_ocr_transactions(
+            "ООО Супермаркет\n"
+            "Кошелек\n"
+            "01.08.2026 10:10\n"
+            "Покупка 250,00 ₽\n"
+            "Счёт 20,00\n"
+            "Возврат 10,00\n",
+            "Europe/Moscow",
+            "RUB",
+        )
+
+
 def test_batch_enforces_currency_from_a_document_header() -> None:
     with pytest.raises(OcrImportError, match="USD"):
         parse_ocr_transactions(

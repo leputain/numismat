@@ -69,6 +69,25 @@ _TOTAL_WEIGHTS = (
     ("покупка", 90),
     ("перевод", 80),
 )
+_RECEIPT_TOTAL_MARKERS = frozenset(
+    {
+        "к оплате",
+        "итого",
+        "итого к оплате",
+        "итог",
+        "общая сумма",
+        "total",
+        "total expenses",
+        "total income",
+        "сумма операции",
+        "сумма покупки",
+        "сумма расходов",
+        "сумма доходов",
+        "всего",
+        "всего расходов",
+        "всего доходов",
+    }
+)
 _AMOUNT_NEGATIVE = (
     "подытог",
     "subtotal",
@@ -609,6 +628,16 @@ def _parse_explicit_rows(
     return tuple(result)
 
 
+def _has_receipt_total(lines: list[str]) -> bool:
+    if _receipt_marked(lines):
+        return True
+    return any(
+        _is_aggregate_amount_line(line)
+        or any(label in line.casefold().replace("ё", "е") for label in _RECEIPT_TOTAL_MARKERS)
+        for line in lines
+    )
+
+
 def parse_ocr_transactions(
     text: str,
     timezone: str,
@@ -621,6 +650,8 @@ def parse_ocr_transactions(
     explicit_rows = _parse_explicit_rows(lines, timezone, base_currency)
     if explicit_rows:
         return explicit_rows
+    if len(_amount_candidates(lines)) > 1 and not _has_receipt_total(lines):
+        raise OcrImportError("На изображении найдено несколько сумм — укажите нужную текстом")
     amount = _select_amount(lines, base_currency)
     occurred_at, needs_confirmation = _occurred_at(lines, timezone)
     return (
