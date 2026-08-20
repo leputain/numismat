@@ -2,10 +2,10 @@
 
 Последнее обновление: 2026-08-20.
 
-Статус ниже описывает только состояние файлов этого checkout. Он не является заявлением о live deployment.
-Итоговый baseline M0/M1 handoff gate ранее выполнен на изолированных test-контейнерах, включая Docker/Compose,
-dependency audit и synthetic encrypted backup/restore. Текущий multi-user diff ещё не прошёл consolidated gate и не
-является заявлением о завершённом production rollout.
+Статус ниже в основном описывает состояние файлов checkout; live-состояние указывается только отдельными датированными
+пунктами. Итоговый baseline M0/M1 handoff gate ранее выполнен на изолированных test-контейнерах, включая
+Docker/Compose, dependency audit и synthetic encrypted backup/restore. Multi-user commit `0e86e21` прошёл отдельный
+release gate и 2026-08-20 развёрнут в production в singleton fallback без включения дополнительных ID.
 
 ## Стабильная основа
 
@@ -40,8 +40,23 @@ dependency audit и synthetic encrypted backup/restore. Текущий multi-use
   повторяет guard, а mismatch не отправляется и не получает `sent_at`.
 - [x] Canonical OpenAPI и generated TypeScript contract синхронизированы: 63 paths, обязательный
   `X-Session-Binding` на 66 SessionCookie operations и auth success response header; multi-user документация обновлена.
-- [ ] Завершить consolidated two-user PostgreSQL/frontend/static/Compose/migration gate без skips.
-- [ ] Выполнить singleton-first rollout, проверить primary owner, затем отдельно включить дополнительные ID.
+- [x] Завершён multi-user PostgreSQL/frontend/static/Compose/migration release-slice без skips и P0/P1 findings.
+- [x] Выполнен singleton-first rollout `0e86e21`: primary owner auth/session-binding/read/write-envelope/logout smoke
+  прошёл, доменные данные не изменились. Дополнительные ID намеренно ещё не включены.
+
+### Проверки multi-user checkout и rollout — 2026-08-20
+
+- [x] `uv sync --frozen`; Ruff check и scoped format; mypy strict на `268` source-файлах.
+- [x] Релевантный unit suite: `1895 passed`; один локальный OCR-тест вне release commit был исключён из-за отдельного
+  незавершённого working-tree diff. Frontend `npm run check`: `22` Vitest tests, typecheck, OpenAPI drift и production
+  build прошли; npm и frozen Python runtime audit не нашли известных уязвимостей.
+- [x] Disposable PostgreSQL 18.4: `9` multi-user/migration/onboarding/recurring release tests; fresh head `0012` и
+  цикл `0012 → 0011 → 0012` прошли.
+- [x] Development/production/integration/ops Compose configs и production backend/web images собраны успешно.
+- [x] Перед production migration создан и проверен отдельный `pg_dump -Fc`; migration `0011 → 0012`, runtime-role
+  provisioning и coordinated bot/API/runner/web rollout прошли успешно.
+- [x] Public smoke подтвердил `63` OpenAPI paths, `66` bound operations, signed primary-owner login, stale-binding
+  rejection без `Set-Cookie`, safe invalid mutation без доменной записи, server-side logout и healthy live/readiness.
 
 ## Reliability и UX — 2026-08-12
 

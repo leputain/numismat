@@ -287,8 +287,10 @@ gh workflow run release-gate-full.yml -f profile=check-timed
 ```
 
 Исторический baseline M0/M1 handoff gate пройден: frozen sync, Ruff, mypy, unit/integration, dependency audit, пять
-Compose конфигураций, production image build и synthetic encrypted backup/restore. Он ещё не покрывает текущий
-multi-user/`0012` diff; consolidated gate и его production rollout остаются отдельным последующим этапом.
+Compose конфигураций, production image build и synthetic encrypted backup/restore. Multi-user/`0012` release-slice
+также прошёл scoped static/unit/frontend checks, PostgreSQL 18 migration/isolation gate, dependency audits и
+singleton-first production smoke. Дополнительные пользователи по-прежнему включаются только отдельным изменением
+полного allowlist после проверки primary owner.
 Production использует `compose.production.yaml`, отдельные runtime/migration secrets, `provision-runtime` и
 единственную публичную TLS-точку `web`. Recovery entrypoints: `make restic-init`, `make backup`, `make backup-age`,
 `make restic-check`, `make restore-drill`.

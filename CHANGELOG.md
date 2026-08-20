@@ -94,7 +94,10 @@
 - FastAPI lifespan выполняет bounded advisory-singleton cleanup expired HTTP security state;
 - ранее завершён baseline Task21 release gate: 1838 unit и 146 PostgreSQL/cross-channel integration сценариев без
   skips, Alembic `0011` retained-state guards/roundtrips, dependency audits, production images, edge/TLS privacy smoke
-  и encrypted Restic restore drill прошли успешно; этот результат ещё не покрывает новый multi-user/`0012` diff;
+  и encrypted Restic restore drill прошли успешно;
+- multi-user/`0012` release-slice дополнительно прошёл scoped static/unit/frontend checks, PostgreSQL 18
+  isolation/migration gate, dependency audits, production image build и singleton-first public auth/write-envelope
+  smoke без создания финансовых записей;
 
 ## [v0.45] — 2026-08-12
 
