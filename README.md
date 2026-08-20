@@ -215,6 +215,7 @@ make compose-config validate all Compose files
 make ops-test       synthetic encrypted backup/restore
 make check          полный handoff gate
 make release-gate   релизный gate: compose+openapi+edge+health+audit (без полного pytest)
+make release-gate-ci цель: быстрый CI-совместимый релизный проход (compose/openapi/frontend-api/frontend-audit)
 ```
 
 Итоговый M0/M1 handoff gate пройден: frozen sync, Ruff, mypy, unit/integration, dependency audit, пять Compose
