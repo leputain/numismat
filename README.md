@@ -214,6 +214,7 @@ make web-secrets-check  TLS key ownership/mode и SAN preflight
 make compose-config validate all Compose files
 make ops-test       synthetic encrypted backup/restore
 make check          полный handoff gate
+make release-gate   релизный gate: compose+openapi+edge+health+audit (без полного pytest)
 ```
 
 Итоговый M0/M1 handoff gate пройден: frozen sync, Ruff, mypy, unit/integration, dependency audit, пять Compose

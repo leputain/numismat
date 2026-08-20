@@ -12,7 +12,7 @@ OPS_COMPOSE = $(COMPOSE) -p $(OPS_PROJECT) -f compose.ops.yaml
 	restore-drill healthcheck openapi frontend-install frontend-api-generate \
 	openapi-check frontend-api-check frontend-typecheck frontend-test frontend-build \
 	frontend-check frontend-audit \
-	web-image web-edge-smoke web-secrets-check
+	web-image web-edge-smoke web-secrets-check release-gate
 
 COMPOSE_CONFIG_HTTP_ENV = MINIAPP_PUBLIC_URL=https://numismat.invalid \
 	HTTP_SECURITY_KEY=invalid-compose-config-placeholder \
@@ -149,6 +149,17 @@ openapi-check:
 	trap 'rm -f "$$contract"' EXIT; \
 	PYTHONPATH=src $(UV) run python scripts/export_openapi.py --output "$$contract"; \
 	cmp -s openapi/numismat-v1.json "$$contract"
+
+release-gate:
+	$(UV) sync --frozen
+	$(MAKE) compose-config
+	$(MAKE) openapi-check
+	$(MAKE) frontend-api-check
+	$(MAKE) web-secrets-check
+	$(MAKE) web-edge-smoke
+	$(MAKE) frontend-audit
+	$(MAKE) healthcheck
+	$(MAKE) audit
 
 audit:
 	@set -euo pipefail; \
