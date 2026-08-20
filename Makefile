@@ -13,7 +13,7 @@ OPS_COMPOSE = $(COMPOSE) -p $(OPS_PROJECT) -f compose.ops.yaml
 	openapi-check frontend-api-check frontend-typecheck frontend-test frontend-build \
 	frontend-check frontend-audit \
 	web-image web-edge-smoke web-secrets-check release-gate release-gate-ci \
-	release-gate-ci-timed release-gate-timed
+	release-gate-ci-timed release-gate-timed check-timed
 
 COMPOSE_CONFIG_HTTP_ENV = MINIAPP_PUBLIC_URL=https://numismat.invalid \
 	HTTP_SECURITY_KEY=invalid-compose-config-placeholder \
@@ -109,6 +109,24 @@ check:
 	docker build -t finbot:check .
 	$(MAKE) web-edge-smoke
 	$(MAKE) ops-test
+
+check-timed:
+	bash scripts/release-gate-timed.sh "uv sync --frozen" $(UV) sync --frozen
+	bash scripts/release-gate-timed.sh "make frontend-install" $(MAKE) frontend-install
+	bash scripts/release-gate-timed.sh "ruff format --check" $(UV) run ruff format --check .
+	bash scripts/release-gate-timed.sh "ruff check" $(UV) run ruff check .
+	bash scripts/release-gate-timed.sh "git diff --check" git diff --check
+	bash scripts/release-gate-timed.sh "mypy" $(UV) run mypy src
+	bash scripts/release-gate-timed.sh "unit tests" $(UV) run pytest tests/unit
+	bash scripts/release-gate-timed.sh "openapi-check" $(MAKE) openapi-check
+	bash scripts/release-gate-timed.sh "frontend-check" $(MAKE) frontend-check
+	bash scripts/release-gate-timed.sh "frontend-audit" $(MAKE) frontend-audit
+	bash scripts/release-gate-timed.sh "integration" $(MAKE) integration
+	bash scripts/release-gate-timed.sh "audit" $(MAKE) audit
+	bash scripts/release-gate-timed.sh "compose-config" $(MAKE) compose-config
+	bash scripts/release-gate-timed.sh "docker build (finbot:check)" docker build -t finbot:check .
+	bash scripts/release-gate-timed.sh "web-edge-smoke" $(MAKE) web-edge-smoke
+	bash scripts/release-gate-timed.sh "ops-test" $(MAKE) ops-test
 
 build:
 	docker build -t finbot:local .

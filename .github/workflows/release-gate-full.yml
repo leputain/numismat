@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - release-gate-timed
+          - check-timed
 
 permissions:
   contents: read
@@ -32,4 +33,4 @@ jobs:
       - name: Run full timed release gate
         run: |
           echo "# Full Release Gate timings" > "$GITHUB_STEP_SUMMARY"
-          bash scripts/release-gate-timed.sh "${{ github.event.inputs.profile }}" make ${{ github.event.inputs.profile }}
+          bash scripts/release-gate-timed.sh "${{ github.event.inputs.profile }}" make "${{ github.event.inputs.profile }}"

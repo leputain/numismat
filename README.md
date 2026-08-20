@@ -218,6 +218,7 @@ make release-gate   релизный gate: compose+openapi+edge+health+audit (б
 make release-gate-ci цель: быстрый CI-совместимый релизный проход (compose/openapi/frontend-api/frontend-audit)
 make release-gate-ci-timed тайминг-версия `release-gate-ci` (каждый шаг c duration)
 make release-gate-timed тайминг-версия полного `release-gate` для локальной диагностики
+make check-timed тайминг-версия полного `check` (локальная диагностика затрат по шагам)
 ``` 
 
 ### Быстрый runbook gate
@@ -238,7 +239,13 @@ make release-gate-ci   # локально/CI: compose+openapi+frontend API+audit
 make release-gate      # полный локальный prod-like gate
 make release-gate-ci-timed
 make release-gate-timed
-make release-gate-ci-timed && gh workflow run release-gate-full.yml # ручной full-prod-like timed run в CI (workflow_dispatch)
+make check-timed
+```
+
+Ручной запуск в GitHub Actions (workflow_dispatch):
+```bash
+gh workflow run release-gate-full.yml -f profile=release-gate-timed
+gh workflow run release-gate-full.yml -f profile=check-timed
 ```
 
 Итоговый M0/M1 handoff gate пройден: frozen sync, Ruff, mypy, unit/integration, dependency audit, пять Compose
