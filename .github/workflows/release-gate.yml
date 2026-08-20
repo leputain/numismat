@@ -43,13 +43,13 @@ jobs:
           node-version: "22.22.2"
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Install backend dependencies
-        run: uv sync --frozen
-      - name: Install frontend dependencies
-        run: make frontend-install
       - name: Init release gate timing summary
         run: |
-          echo "# Release Gate timings" >> "$GITHUB_STEP_SUMMARY"
+          echo "# Release Gate timings" > "$GITHUB_STEP_SUMMARY"
+      - name: Install backend dependencies
+        run: bash scripts/release-gate-timed.sh "uv sync" uv sync --frozen
+      - name: Install frontend dependencies
+        run: bash scripts/release-gate-timed.sh "make frontend-install" make frontend-install
       - name: Check compose configs
         run: bash scripts/release-gate-timed.sh "compose-config" make compose-config
       - name: Check OpenAPI contract
