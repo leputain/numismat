@@ -9,6 +9,7 @@ from finbot.application.dto import (
     AccountSnapshot,
     CategorySnapshot,
     OwnerSnapshot,
+    TimeSeriesGrain,
     TransactionCursor,
     TransactionSnapshot,
 )
@@ -22,6 +23,7 @@ from finbot.application.use_cases.queries import (
     GetDashboard,
     GetOwnerSettings,
     GetPeriodReport,
+    GetTimeSeries,
     GetTransaction,
     ListAccounts,
     ListCategories,
@@ -229,6 +231,125 @@ async def test_reports_and_comparison_keep_currency_totals_separate() -> None:
     ]
     assert len(report.category_totals) == 2
     assert len(report.transactions) == 3
+
+
+@pytest.mark.asyncio
+async def test_timeseries_uses_local_calendar_buckets_counts_and_clipped_bounds() -> None:
+    owner_id = uuid7()
+    start = datetime(2026, 8, 10, 22, tzinfo=UTC)
+    end = datetime(2026, 8, 12, 10, tzinfo=UTC)
+    deleted = _transaction(
+        occurred_at=datetime(2026, 8, 12, 8, tzinfo=UTC),
+        amount_minor=999,
+        deleted_at=end,
+    )
+    repository = InMemoryQueryRepository(
+        transactions={
+            owner_id: (
+                _transaction(occurred_at=start + timedelta(minutes=30), amount_minor=250),
+                _transaction(
+                    occurred_at=start + timedelta(hours=5),
+                    amount_minor=900,
+                    kind=TransactionType.INCOME,
+                ),
+                _transaction(
+                    occurred_at=datetime(2026, 8, 12, 8, tzinfo=UTC),
+                    amount_minor=7,
+                    currency="USD",
+                ),
+                deleted,
+            )
+        }
+    )
+
+    result = await GetTimeSeries(repository)(
+        owner_id,
+        start,
+        end,
+        timezone="Europe/Moscow",
+        grain=TimeSeriesGrain.DAY,
+    )
+
+    assert result.start == start
+    assert result.end == end
+    assert result.timezone == "Europe/Moscow"
+    assert result.grain is TimeSeriesGrain.DAY
+    assert [(bucket.start, bucket.end) for bucket in result.buckets] == [
+        (start, datetime(2026, 8, 11, 21, tzinfo=UTC)),
+        (datetime(2026, 8, 11, 21, tzinfo=UTC), end),
+    ]
+    first = result.buckets[0].totals[0]
+    assert (
+        first.currency,
+        first.income_minor,
+        first.expense_minor,
+        first.net_minor,
+        first.income_count,
+        first.expense_count,
+    ) == ("RUB", 900, 250, 650, 1, 1)
+    assert tuple(item.currency for item in result.buckets[1].totals) == ("USD",)
+    assert result.buckets[1].totals[0].expense_minor == 7
+
+
+@pytest.mark.asyncio
+async def test_timeseries_rejects_more_than_366_owner_local_buckets() -> None:
+    start = datetime(2025, 1, 1, 12, tzinfo=UTC)
+
+    with pytest.raises(ApplicationValidationError):
+        await GetTimeSeries(InMemoryQueryRepository())(
+            uuid7(),
+            start,
+            start + timedelta(days=366),
+            timezone="UTC",
+            grain="day",
+        )
+
+
+@pytest.mark.asyncio
+async def test_timeseries_rejects_more_than_32_currencies_in_one_bucket() -> None:
+    owner_id = uuid7()
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    currencies = tuple(
+        f"{chr(65 + first)}{chr(65 + second)}{chr(65 + third)}"
+        for first in range(26)
+        for second in range(26)
+        for third in range(26)
+    )[:33]
+    repository = InMemoryQueryRepository(
+        transactions={
+            owner_id: tuple(
+                _transaction(occurred_at=start, currency=currency) for currency in currencies
+            )
+        }
+    )
+
+    with pytest.raises(ApplicationValidationError):
+        await GetTimeSeries(repository)(
+            owner_id,
+            start,
+            start + timedelta(days=1),
+            timezone="UTC",
+            grain="day",
+        )
+
+
+@pytest.mark.asyncio
+async def test_timeseries_week_starts_on_owner_local_iso_monday() -> None:
+    start = datetime(2026, 8, 12, tzinfo=UTC)
+    end = datetime(2026, 8, 19, tzinfo=UTC)
+
+    result = await GetTimeSeries(InMemoryQueryRepository())(
+        uuid7(),
+        start,
+        end,
+        timezone="Europe/Moscow",
+        grain="week",
+    )
+
+    assert [(item.start, item.end, item.totals) for item in result.buckets] == [
+        (start, datetime(2026, 8, 16, 21, tzinfo=UTC), ()),
+        (datetime(2026, 8, 16, 21, tzinfo=UTC), end, ()),
+    ]
 
 
 @pytest.mark.asyncio
