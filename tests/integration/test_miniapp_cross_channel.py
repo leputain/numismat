@@ -286,6 +286,7 @@ async def test_draft_handoff_is_cross_channel_and_mobile_retry_is_idempotent() -
             mutation_origin=ORIGIN,
         )
         cookie = f"{SESSION_COOKIE}={session_token}; {CSRF_COOKIE}={csrf_token}"
+        session_binding = digester.session_binding(session_token)
 
         async with httpx2.AsyncClient(
             transport=httpx2.ASGITransport(app=app, raise_app_exceptions=False),
@@ -293,7 +294,7 @@ async def test_draft_handoff_is_cross_channel_and_mobile_retry_is_idempotent() -
         ) as client:
             active = await client.get(
                 "/api/v1/drafts/active",
-                headers={"Cookie": cookie},
+                headers={"Cookie": cookie, "X-Session-Binding": session_binding},
             )
             assert active.status_code == 200
             assert active.json()["draft"]["id"] == str(telegram_draft_id)
@@ -303,6 +304,7 @@ async def test_draft_handoff_is_cross_channel_and_mobile_retry_is_idempotent() -
                 "Idempotency-Key": _opaque_token(),
                 "Origin": ORIGIN,
                 "X-CSRF-Token": csrf_token,
+                "X-Session-Binding": session_binding,
             }
             confirm_path = f"/api/v1/drafts/{telegram_draft_id}/confirm"
             confirmed = await client.post(
@@ -323,6 +325,7 @@ async def test_draft_handoff_is_cross_channel_and_mobile_retry_is_idempotent() -
                 "Idempotency-Key": _opaque_token(),
                 "Origin": ORIGIN,
                 "X-CSRF-Token": csrf_token,
+                "X-Session-Binding": session_binding,
             }
             created = await client.post("/api/v1/drafts", headers=create_headers, json={})
             retried_create = await client.post(

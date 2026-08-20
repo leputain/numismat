@@ -40,6 +40,7 @@ def _owner(user: User) -> AuthOwner:
         locale=user.locale,
         timezone=user.timezone,
         base_currency=user.base_currency,
+        telegram_user_id=user.telegram_user_id,
     )
 
 
@@ -94,6 +95,47 @@ class SqlAlchemyHttpSessionAuthenticator:
         if row is None:
             return SessionCheck(status=SessionCheckStatus.INVALID)
         return self._active(*row)
+
+    async def lock_for_login(
+        self,
+        session_token: SessionTokenDigest,
+        *,
+        now: datetime,
+    ) -> SessionCheck:
+        row = (
+            await self._session.execute(
+                select(WebSession, User)
+                .join(User, User.id == WebSession.user_id)
+                .where(
+                    WebSession.session_token_hash == session_token.database_value(),
+                    WebSession.revoked_at.is_(None),
+                    WebSession.expires_at > now,
+                )
+                .with_for_update(of=WebSession)
+            )
+        ).one_or_none()
+        if row is None:
+            return SessionCheck(status=SessionCheckStatus.INVALID)
+        return self._active(*row._t)
+
+    async def revoke_for_login(
+        self,
+        session_token: SessionTokenDigest,
+        *,
+        now: datetime,
+    ) -> None:
+        web_session = await self._session.scalar(
+            select(WebSession)
+            .where(
+                WebSession.session_token_hash == session_token.database_value(),
+                WebSession.revoked_at.is_(None),
+                WebSession.expires_at > now,
+            )
+            .with_for_update()
+        )
+        if web_session is not None:
+            web_session.revoked_at = now
+            await self._session.flush()
 
     async def lock_for_mutation(
         self,
@@ -211,6 +253,22 @@ class SqlAlchemyAuthPersistence:
         now: datetime,
     ) -> SessionCheck:
         return await self._session_authenticator.read(session_token, now=now)
+
+    async def lock_session_for_login(
+        self,
+        session_token: SessionTokenDigest,
+        *,
+        now: datetime,
+    ) -> SessionCheck:
+        return await self._session_authenticator.lock_for_login(session_token, now=now)
+
+    async def revoke_session_for_login(
+        self,
+        session_token: SessionTokenDigest,
+        *,
+        now: datetime,
+    ) -> None:
+        await self._session_authenticator.revoke_for_login(session_token, now=now)
 
     async def lock_session_for_mutation(
         self,

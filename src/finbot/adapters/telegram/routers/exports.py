@@ -7,13 +7,13 @@ from aiogram.types import Message
 
 from finbot.adapters.telegram.controllers.exports import CsvExportController
 from finbot.adapters.telegram.executor import TelegramMutationRequest
+from finbot.adapters.telegram.principal import telegram_principal_for_message
 from finbot.application.errors import ApplicationError
 from finbot.application.export import CsvExportReceiptSnapshot
 
 
 @dataclass(frozen=True, slots=True)
 class CsvExportRequestDefaults:
-    owner_telegram_user_id: int = field(repr=False)
     locale: str = field(repr=False)
     timezone: str = field(repr=False)
     currency: str = field(repr=False)
@@ -23,10 +23,11 @@ class CsvExportRequestDefaults:
         update_id: int | None,
         message: Message,
     ) -> TelegramMutationRequest:
+        principal = telegram_principal_for_message(message)
         return TelegramMutationRequest(
             update_id=update_id,
-            owner_telegram_user_id=self.owner_telegram_user_id,
-            chat_id=message.chat.id,
+            owner_telegram_user_id=principal.telegram_user_id,
+            chat_id=principal.chat_id,
             locale=self.locale,
             timezone=self.timezone,
             currency=self.currency,

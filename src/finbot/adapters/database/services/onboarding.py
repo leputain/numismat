@@ -11,9 +11,14 @@ from finbot.application.services.onboarding import (
     normalize_currency_code,
 )
 
-# The application has one owner. A database-scoped constant avoids putting a Telegram
-# identifier in the advisory-lock statement while still serializing first-use setup
-# across workers and processes. The xact lock is deliberately held until caller commit.
+
+class OwnerChatBindingError(RuntimeError):
+    """The verified Telegram actor does not match the immutable private-chat binding."""
+
+
+# A database-scoped constant avoids putting a Telegram identifier in the advisory-lock
+# statement while still serializing first-use setup across workers and processes. The
+# xact lock is deliberately held until caller commit.
 _ONBOARDING_ADVISORY_LOCK = 0x46494E424F54
 
 
@@ -82,6 +87,13 @@ async def ensure_owner_user(
 ) -> User:
     """Load or atomically initialize the owner and their complete seed catalog."""
 
+    if (
+        type(telegram_user_id) is not int
+        or type(telegram_chat_id) is not int
+        or telegram_user_id <= 0
+        or telegram_user_id != telegram_chat_id
+    ):
+        raise OwnerChatBindingError("Telegram private-chat binding is invalid")
     normalized_currency = normalize_currency_code(currency)
     await _lock_onboarding(session)
     user = await session.scalar(
@@ -117,7 +129,9 @@ async def ensure_owner_user(
         user.default_account_id = account.id
         return user
 
-    if user.telegram_chat_id != telegram_chat_id:
+    if user.telegram_chat_id is None:
         user.telegram_chat_id = telegram_chat_id
+    elif user.telegram_chat_id != telegram_chat_id:
+        raise OwnerChatBindingError("Telegram private-chat binding is immutable")
     await _repair_missing_default(session, user, normalized_currency)
     return user

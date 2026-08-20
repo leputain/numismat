@@ -47,6 +47,7 @@ from finbot.adapters.http.app import create_app
 from finbot.adapters.http.auth.cookies import CSRF_COOKIE, SESSION_COOKIE
 from finbot.adapters.http.auth.crypto import HttpSecurityDigester
 from finbot.adapters.http.auth.ports import AuthPersistence, SessionCheck
+from finbot.adapters.http.auth.service import SessionCredentials
 from finbot.adapters.http.catalogs.ports import CatalogQueryUnitOfWork
 from finbot.adapters.http.catalogs.service import HttpCatalogService
 from finbot.adapters.http.finance.cursor import TransactionCursorCodec
@@ -380,7 +381,12 @@ def _cookie_header(tokens: _AuthTokens) -> str:
 
 
 def _read_headers(tokens: _AuthTokens) -> dict[str, str]:
-    return {"Cookie": _cookie_header(tokens)}
+    return {
+        "Cookie": _cookie_header(tokens),
+        "X-Session-Binding": HttpSecurityDigester(SECURITY_KEY).session_binding(
+            tokens.session_token
+        ),
+    }
 
 
 def _mutation_headers(tokens: _AuthTokens, key: str) -> dict[str, str]:
@@ -389,6 +395,9 @@ def _mutation_headers(tokens: _AuthTokens, key: str) -> dict[str, str]:
         "Idempotency-Key": key,
         "Origin": ORIGIN,
         "X-CSRF-Token": tokens.csrf_token,
+        "X-Session-Binding": HttpSecurityDigester(SECURITY_KEY).session_binding(
+            tokens.session_token
+        ),
     }
 
 
@@ -628,7 +637,13 @@ async def test_catalog_query_uow_is_read_only_repeatable_and_authenticates_first
             ),
             clock=lambda: NOW,
         )
-        result = await service.accounts(tokens.session_token, archived=False)
+        result = await service.accounts(
+            SessionCredentials(
+                tokens.session_token,
+                digester.session_binding(tokens.session_token),
+            ),
+            archived=False,
+        )
 
         assert [item.account_id for item in result.items] == [owner.account_id]
         assert recording_query_factory.order.calls == ["authenticate", "owner", "catalog"]

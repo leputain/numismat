@@ -23,6 +23,7 @@ cleanup
 "${compose[@]}" build migrate
 "${compose[@]}" up --detach --wait --wait-timeout 90 db
 "${compose[@]}" run --rm --no-deps migrate
+"${compose[@]}" run --rm --no-deps migrate alembic downgrade 0011_bank_imports
 "${compose[@]}" run --rm --no-deps tests \
   python tests/integration/migration_0011_to_0008_fixture.py seed-0011
 if "${compose[@]}" run --rm --no-deps migrate \

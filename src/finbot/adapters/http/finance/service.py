@@ -7,7 +7,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from finbot.adapters.http.auth.crypto import HttpSecurityDigester
-from finbot.adapters.http.auth.service import SessionAuthenticator
+from finbot.adapters.http.auth.service import SessionAuthenticator, SessionCredentials
 from finbot.adapters.http.finance.cursor import TransactionCursorCodec
 from finbot.adapters.http.finance.ports import FinanceQueryUnitOfWorkFactory
 from finbot.application.dto import (
@@ -59,9 +59,10 @@ class FinanceQueryService:
         digester: HttpSecurityDigester,
         cursor_codec: TransactionCursorCodec,
         uow_factory: FinanceQueryUnitOfWorkFactory,
+        allowed_telegram_user_ids: frozenset[int] | None = None,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
-        self._authenticator = SessionAuthenticator(digester)
+        self._authenticator = SessionAuthenticator(digester, allowed_telegram_user_ids)
         self._cursor_codec = cursor_codec
         self._uow_factory = uow_factory
         self._clock = clock
@@ -72,12 +73,12 @@ class FinanceQueryService:
             raise ValueError("finance query clock must be timezone-aware")
         return value.astimezone(UTC)
 
-    async def dashboard(self, raw_session_token: str) -> DashboardSnapshot:
+    async def dashboard(self, credentials: SessionCredentials) -> DashboardSnapshot:
         now = self._now()
         async with self._uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             owner = authenticated.owner
@@ -96,12 +97,12 @@ class FinanceQueryService:
                 recent_limit=DASHBOARD_RECENT_LIMIT,
             )
 
-    async def today_report(self, raw_session_token: str) -> PeriodReportSnapshot:
+    async def today_report(self, credentials: SessionCredentials) -> PeriodReportSnapshot:
         now = self._now()
         async with self._uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             owner = authenticated.owner
@@ -117,7 +118,7 @@ class FinanceQueryService:
 
     async def period_report(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         start: datetime,
         end: datetime,
         *,
@@ -128,7 +129,7 @@ class FinanceQueryService:
         async with self._uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             return await GetPeriodReport(uow.finance)(
@@ -141,7 +142,7 @@ class FinanceQueryService:
 
     async def compare_periods(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         current_start: datetime,
         current_end: datetime,
         previous_start: datetime,
@@ -151,7 +152,7 @@ class FinanceQueryService:
         async with self._uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             return await ComparePeriods(uow.finance)(
@@ -164,7 +165,7 @@ class FinanceQueryService:
 
     async def timeseries(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         start: datetime,
         end: datetime,
         *,
@@ -174,7 +175,7 @@ class FinanceQueryService:
         async with self._uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             owner = authenticated.owner
@@ -188,7 +189,7 @@ class FinanceQueryService:
 
     async def transactions(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         *,
         limit: int,
         raw_cursor: str | None,
@@ -204,7 +205,7 @@ class FinanceQueryService:
         async with self._uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             owner_id = authenticated.owner.owner_id
@@ -226,7 +227,7 @@ class FinanceQueryService:
 
     async def deleted_transactions(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         *,
         limit: int,
         raw_cursor: str | None,
@@ -237,7 +238,7 @@ class FinanceQueryService:
         async with self._uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             owner_id = authenticated.owner.owner_id
@@ -264,14 +265,14 @@ class FinanceQueryService:
 
     async def transaction(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         transaction_id: UUID,
     ) -> TransactionSnapshot:
         now = self._now()
         async with self._uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             return await GetTransaction(uow.finance)(

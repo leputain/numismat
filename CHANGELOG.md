@@ -6,6 +6,23 @@
 
 Версия пакета остаётся `0.45.0`; перечисленные изменения ещё не выпущены отдельным релизом.
 
+- добавлен закрытый multi-user режим: полный `TELEGRAM_ALLOWED_USER_IDS` ограничен 32 canonical ID, пустое значение
+  сохраняет singleton primary owner, а каждый разрешённый private actor получает отдельный финансовый ledger без
+  shared household, cross-user transfers, RBAC или self-registration;
+- immutable Telegram principal теперь проходит через message/callback/outbox paths; actor обязан совпадать с private
+  chat, onboarding запрещает rebind, а per-user Mini App menu устанавливается только после committed `/start`/`/menu`;
+- Mini App при каждом запуске предъявляет signed `initData` до доверия к cookie, очищает protected cache перед subject
+  rebinding и безопасно различает same-subject session reuse и stale cross-subject cookie replacement; удалённый из
+  allowlist subject отклоняется API даже с прежней session после restart;
+- все 66 SessionCookie operations требуют page-memory `X-Session-Binding`; `Set-Cookie` выдаётся только при создании
+  новой successful login session, а failed auth/protected responses и successful server-side logout не удаляют shared
+  WebView cookies. `hidden`/любой `pagehide` синхронно убирают tenant UI/cache; resume использует только `/auth/me` и
+  не воспроизводит stale `initData`;
+- миграция `0012_multitenant_integrity` fail closed проверяет legacy rows и добавляет private chat constraint плюс
+  composite ownership references для default account, category parent, audit transaction, recurring/import draft и
+  Telegram outbox; recurring materialization выбирает максимум одну due-схему на owner за tick;
+- outbox delivery теперь проверяет owner и immutable private chat связанного draft до Telegram network send;
+  mismatch fail closed не отправляется и не помечается доставленным, presentation binding повторяет тот же guard;
 - добавлены framework-neutral finance/draft/catalog/OCR use cases, deterministic fake ports и PostgreSQL
   repositories/queries для общего application API;
 - focused Telegram handlers вынесены в routers/controllers без прямых SQLAlchemy queries и commits; mutation flows
@@ -43,7 +60,7 @@
   privacy-safe request events и раздельные live/database+Alembic readiness probes;
 - добавлена миграция `0007_http_security_state`: bounded web sessions и HTTP idempotency хранят только keyed digests,
   используют transaction-external repositories, cleanup indexes, fail-closed downgrade и проверенные runtime grants;
-- реализован owner-only Telegram Mini App auth: строгая проверка bounded raw `initData`/`auth_date`, retained replay
+- реализован allowlist-bound Telegram Mini App auth: строгая проверка bounded raw `initData`/`auth_date`, retained replay
   denial по verified Telegram hash, одночасовые opaque host-only Secure cookies и double-submit CSRF; нестабильный
   native WebView Origin принимается только как optional bounded metadata, атомарный logout и production bypass
   отсутствуют;
@@ -70,14 +87,14 @@
 - реализован authenticated Mini App shell и finance UI: same-origin cookie/CSRF client, mobile-first overview,
   currency-isolated analytics с точным дневным SVG-графиком, history/detail, trash и revision-safe shared draft flow
   без хранения `initData` или финансовой telemetry;
-- добавлен owner-only per-chat Mini App menu с fail-closed запретом глобального Main Mini App и ленивым retry после
-  первого private `/start`/`/menu`;
+- добавлен allowlist-bound per-chat Mini App menu с fail-closed запретом глобального Main Mini App и ленивым retry
+  после первого private `/start`/`/menu`;
 - добавлен pinned non-root TLS web edge с immutable assets, BrowserRouter fallback, CSP/security/cache headers,
   same-origin internal API proxy и privacy-safe event-code-only access log;
 - FastAPI lifespan выполняет bounded advisory-singleton cleanup expired HTTP security state;
-- завершён единый release gate: 1838 unit и 146 PostgreSQL/cross-channel integration сценариев без skips,
-  Alembic `0011` retained-state guards/roundtrips, dependency audits, production images, edge/TLS privacy smoke и
-  encrypted Restic restore drill прошли успешно;
+- ранее завершён baseline Task21 release gate: 1838 unit и 146 PostgreSQL/cross-channel integration сценариев без
+  skips, Alembic `0011` retained-state guards/roundtrips, dependency audits, production images, edge/TLS privacy smoke
+  и encrypted Restic restore drill прошли успешно; этот результат ещё не покрывает новый multi-user/`0012` diff;
 
 ## [v0.45] — 2026-08-12
 

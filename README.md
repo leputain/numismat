@@ -15,8 +15,10 @@
 </div>
 
 > [!IMPORTANT]
-> Numismat рассчитан на одного владельца и работает только в его личном Telegram-чате. Это не мультипользовательский
-> сервис и не банковское приложение. Внутреннее имя Python-пакета и Docker-сервиса — `finbot`.
+> Numismat — закрытая self-hosted установка для явно разрешённого списка до 32 Telegram-пользователей. Каждый
+> работает только в собственном личном чате и получает полностью отдельный финансовый ledger. Общих семейных
+> бюджетов, RBAC и самостоятельной регистрации нет; это также не банковское приложение. Внутреннее имя
+> Python-пакета и Docker-сервиса — `finbot`.
 
 ## Возможности
 
@@ -26,7 +28,8 @@
 - детерминированные правила категоризации только после согласия владельца;
 - отчёты за день и месяц, сравнение периодов, расходы по категориям и owner-local временной ряд;
 - CSV UTF-8 with BOM с защитой от spreadsheet formulas;
-- owner-only Telegram Mini App с мобильным обзором, аналитикой, историей и общим review-first draft;
+- приватный Telegram Mini App для каждого разрешённого пользователя с мобильным обзором, аналитикой, историей и
+  отдельным review-first draft;
 - бюджеты расходов с явным периодом и прогрессом только в собственной валюте, без скрытого FX;
 - регулярные daily/weekly/monthly расписания, которые создают только review-черновики, а не операции;
 - ручные неизменяемые версии валютных курсов и отчёты, привязанные к явно выбранной версии;
@@ -88,7 +91,8 @@ finance values, owner ID и protocol payloads не журналируются.
 
 ## Быстрый старт
 
-Требуются Docker Engine, Docker Compose v2, Telegram bot token от `@BotFather` и числовой Telegram ID владельца.
+Требуются Docker Engine, Docker Compose v2, Telegram bot token от `@BotFather` и числовой Telegram ID основного
+владельца. Дополнительные пользователи включаются только явным allowlist.
 
 ```bash
 git clone https://github.com/leputain/numismat.git
@@ -101,6 +105,9 @@ cp .env.example .env
 ```dotenv
 TELEGRAM_BOT_TOKEN=replace-me
 OWNER_TELEGRAM_USER_ID=123456789
+# Optional full allowlist, comma-separated, 1..32 IDs; it must include OWNER_TELEGRAM_USER_ID.
+# Leave empty for the backward-compatible single-user mode.
+TELEGRAM_ALLOWED_USER_IDS=
 DATABASE_URL=postgresql+psycopg://finbot:finbot-dev-only@db:5432/finbot
 MINIAPP_PUBLIC_URL=https://numismat.localhost
 HTTP_SECURITY_KEY=replace-with-canonical-32-byte-base64url
@@ -130,19 +137,31 @@ focused Telegram routers/controllers для menu, finance queries, settings/cata
 draft interactions, OCR и CSV export. `bootstrap.py` остаётся крупным composition root, но не содержит business
 handler bodies, прямых ORM-запросов или ручных commit. M2 начат: добавлен отдельный FastAPI process с versioned
 OpenAPI, fixed error envelope и database/Alembic readiness, а Alembic `0007` добавляет bounded web sessions и HTTP
-idempotency только с keyed digests. Реализованы owner-only Telegram `initData` auth, одночасовая opaque cookie-session,
-session/CSRF защита с bounded optional Origin metadata, retained proof replay denial и logout с транзакционной
-блокировкой.
+idempotency только с keyed digests. Реализованы allowlist-bound Telegram `initData` auth, одночасовая opaque
+cookie-session, session/CSRF защита с bounded optional Origin metadata, retained proof replay denial и logout с
+транзакционной блокировкой. Mini App при каждом запуске сначала предъявляет текущий signed `initData`, и только после
+этого backend может сохранить активную сессию того же пользователя или безопасно заменить cookie другого субъекта.
+Успешный auth response возвращает `X-Session-Binding` — domain-separated HMAC от raw HttpOnly session token без
+идентификатора пользователя. Страница держит его только в памяти и отправляет с каждым protected read/write/logout;
+backend сверяет binding с текущей cookie до выбора tenant. Mutation по-прежнему дополнительно требует double-submit
+CSRF. Если старая страница A увидела cookie пользователя B, её binding получает `401`, не очищая валидные cookies B.
+`Set-Cookie` выдаётся только когда успешный signed login создаёт новую сессию; same-subject reuse не вращает cookies.
+Failed auth, любой protected error и успешный logout никогда не удаляют cookies из общей WebView cookie jar. Logout
+отзывает сессию на сервере и очищает page-memory binding/UI; оставшаяся невалидная cookie безопасно перезаписывается
+следующим успешным signed login. При `hidden` и любом `pagehide` frontend синхронно убирает protected UI/query cache.
+После возврата уже аутентифицированная страница проверяет сохранённую пару cookie+binding только через `/auth/me` и
+никогда не повторяет старый `initData`; suspend во время незавершённого login очищает binding и требует reopen.
+Auth-attempt epochs не дают запоздалому async response восстановить устаревший subject/state.
 
 HTTP read API уже включает month-to-date dashboard, bounded period/comparison reports, owner-local day/week/month
 timeseries, owner-scoped transaction detail и active keyset pagination. Все суммы передаются decimal strings,
 коллекции имеют жёсткие пределы, а auth и
 составной read выполняются в одной `READ ONLY REPEATABLE READ` транзакции. Подписанный cursor нельзя подделать, но
 он не зашифрован; после изменения операции клиент должен начать live-pagination заново. Draft/transaction mutations
-реализованы owner-only и revision-safe: active/get/create/update/confirm/cancel/resume/replace работают через общий
+реализованы tenant-scoped и revision-safe: active/get/create/update/confirm/cancel/resume/replace работают через общий
 persistent draft, а repeat/edit-draft/delete/restore требуют optimistic version. Прямого HTTP transaction-create
 endpoint нет — новая и повторяемая операция появляется в `transactions` только после явного confirm. Каждая mutation
-требует session/CSRF и canonical `Idempotency-Key`; Origin из WebView остаётся optional bounded metadata. Одинаковая
+требует session binding, cookie, CSRF и canonical `Idempotency-Key`; Origin из WebView остаётся optional bounded metadata. Одинаковая
 семантика возвращает сохранённый
 минимальный result, несовместимое повторное использование ключа — typed `409`. HTTP catalog API возвращает полные,
 но жёстко ограниченные списки счетов и категорий, а все create/archive/restore paths — включая Telegram draft input —
@@ -161,7 +180,17 @@ Confirm сохраняет transaction с уникальным provenance `recur
 Alembic `0010` добавляет owner-scoped ручные источники курсов и неизменяемые версии. Курс хранится как целочисленные
 `coefficient + scale`, без `float`; обратные и составные курсы не выводятся автоматически. Конвертированный отчёт
 всегда принимает явный UUID версии, округляет агрегаты детерминированно по HALF_EVEN и не меняет исходную валюту или
-сумму операций. Telegram показывает только опубликованные источники и owner-only ссылку на управление в Mini App.
+сумму операций. Telegram показывает только опубликованные источники и персональную ссылку на управление в Mini App.
+
+Alembic `0012_multitenant_integrity` добавляет fail-closed проверку существующих данных и database-enforced
+composite ownership для основного счёта, иерархии категорий, audit events, recurring/import drafts и Telegram outbox.
+Привязка Telegram пользователя к его private chat неизменяема и требует `telegram_user_id == telegram_chat_id`.
+Recurring materialization выбирает не более одной due-схемы на владельца за tick, чтобы один ledger не вытеснял
+остальных из bounded batch.
+
+Перед любым Telegram network send outbox delivery отдельно сверяет, что связанный draft принадлежит записанному
+owner и его неизменяемому private chat. Та же проверка применяется при создании Telegram presentation; несовпадение
+fail closed останавливает доставку до обращения к Telegram API.
 
 ```text
 src/finbot/
@@ -189,8 +218,12 @@ Alembic `0006_csv_export_outbox_job` сохраняет в outbox только j
 
 ## Безопасность
 
-- доступ требует точного numeric `OWNER_TELEGRAM_USER_ID` и `chat.type == private`; username не используется;
+- доступ требует membership в полном `TELEGRAM_ALLOWED_USER_IDS`, `chat.type == private` и точного равенства
+  verified actor/chat ID; при пустой переменной разрешён только `OWNER_TELEGRAM_USER_ID`, username не используется;
 - stale callbacks проверяются по UUID/revision и актуальному Telegram projection под lock;
+- cookie сама по себе не выбирает tenant: каждый protected HTTP request обязан предъявить page-memory-only
+  `X-Session-Binding`, проверяемый до owner lookup; failed auth/protected responses и successful logout не удаляют
+  shared cookies, а binding mismatch возвращает `401` без очистки чужой новой cookie;
 - JSON-логи принимают только allowlisted event codes и не содержат идентификаторы, суммы, descriptions, message/OCR
   text, tokens или database URL;
 - production bot, API и web edge работают non-root с read-only rootfs, `cap_drop: ALL`, `no-new-privileges` и
@@ -253,8 +286,9 @@ gh workflow run release-gate-full.yml -f profile=release-gate-timed
 gh workflow run release-gate-full.yml -f profile=check-timed
 ```
 
-Итоговый M0/M1 handoff gate пройден: frozen sync, Ruff, mypy, unit/integration, dependency audit, пять Compose
-конфигураций, production image build и synthetic encrypted backup/restore. Production deployment не выполнялся.
+Исторический baseline M0/M1 handoff gate пройден: frozen sync, Ruff, mypy, unit/integration, dependency audit, пять
+Compose конфигураций, production image build и synthetic encrypted backup/restore. Он ещё не покрывает текущий
+multi-user/`0012` diff; consolidated gate и его production rollout остаются отдельным последующим этапом.
 Production использует `compose.production.yaml`, отдельные runtime/migration secrets, `provision-runtime` и
 единственную публичную TLS-точку `web`. Recovery entrypoints: `make restic-init`, `make backup`, `make backup-age`,
 `make restic-check`, `make restore-drill`.
@@ -263,8 +297,18 @@ Production использует `compose.production.yaml`, отдельные ru
 
 До запуска нужны внешние prerequisites: DNS A/AAAA для одного lowercase hostname, публично доверенный TLS-сертификат
 с этим hostname в SAN, доступный TCP/443 и отключённый в BotFather глобальный **Main Mini App**. Последнее обязательно:
-бот проверяет `getMe.has_main_web_app` и не стартует, если Mini App мог бы стать публичным. Владелец должен хотя бы
-один раз открыть private chat с ботом; после `/start` или `/menu` бот повторит установку персональной launch-кнопки.
+бот проверяет `getMe.has_main_web_app` и не стартует, если Mini App мог бы стать публичным. Каждый разрешённый
+пользователь должен хотя бы один раз открыть private chat с ботом; после успешно committed `/start` или `/menu` бот
+установит персональную launch-кнопку.
+
+Разворачивайте multi-user режим поэтапно: сначала оставьте `TELEGRAM_ALLOWED_USER_IDS` пустым и проверьте текущего
+`OWNER_TELEGRAM_USER_ID`, затем задайте полный comma-separated список (максимум 32 ID, без пробелов и дублей) и
+одновременно перезапустите `bot` и `api`. `OWNER_TELEGRAM_USER_ID` обязан входить в список и остаётся основным
+операторским/MCP principal и точкой rollback в singleton-конфигурацию; это не роль с доступом к данным других
+пользователей. Удалённый из списка пользователь будет отклонён bot/API после их перезапуска, включая уже выданную
+HTTP session, но его данные сохранятся. DB-only `recurring-runner` allowlist не читает и продолжит обрабатывать
+сохранённые активные расписания — перед отзывом доступа их нужно явно приостановить либо остановить runner до
+отдельной процедуры offboarding.
 
 `MINIAPP_PUBLIC_URL` задаётся только как `https://lowercase.dns.name` — без port, path, query, fragment или trailing
 dot. Тот же origin используется bot, API и edge; configurable API base URL намеренно отсутствует. Разместите

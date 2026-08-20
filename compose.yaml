@@ -23,6 +23,7 @@ services:
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       OWNER_TELEGRAM_USER_ID: ${OWNER_TELEGRAM_USER_ID:-0}
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://finbot:finbot-dev-only@db:5432/finbot}
       DEFAULT_LOCALE: ${DEFAULT_LOCALE:-ru_RU}
       DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Europe/Moscow}
@@ -53,6 +54,7 @@ services:
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       OWNER_TELEGRAM_USER_ID: ${OWNER_TELEGRAM_USER_ID:-0}
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://finbot:finbot-dev-only@db:5432/finbot}
       DEFAULT_LOCALE: ${DEFAULT_LOCALE:-ru_RU}
       DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Europe/Moscow}

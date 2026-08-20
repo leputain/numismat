@@ -8,7 +8,7 @@ This document describes the existing application and its intended incremental di
 
 ## Decision Rationale
 
-- **Project type:** Security-sensitive, single-owner personal-finance Telegram bot with local OCR and operational backup workflows.
+- **Project type:** Security-sensitive private personal-finance Telegram bot with an operator-managed allowlist of up to 32 isolated ledgers, local OCR, and operational backup workflows.
 - **Tech stack:** Python 3.14, aiogram, FastAPI/Uvicorn, PostgreSQL, SQLAlchemy asyncio, Alembic, Pydantic, React/Vite/TypeScript/Tailwind/TanStack Query, Pillow/Tesseract, Docker Compose, and Restic.
 - **Key factor:** Money, draft, update-idempotency, authorization, and privacy rules require testable framework-independent boundaries, while the product still benefits from a single deployable process and database.
 - **Rejected alternative:** Independently deployed business microservices add network, consistency, deployment, and observability failure modes without a scaling or ownership need. Polling, API, and static-serving processes still share one application model and database.
@@ -49,14 +49,15 @@ src/finbot/
 │   │   ├── routers/                # Bounded parsing, ordering, acknowledgement, and fallback
 │   │   ├── controllers/            # Thin framework-boundary orchestration over use cases
 │   │   ├── executor.py             # Atomic claim/mutation/outbox/commit envelope
-│   │   ├── middlewares/auth.py     # Exact-owner/private-chat inbound authorization
+│   │   ├── middlewares/auth.py     # Bounded-allowlist/private actor-chat authorization
+│   │   ├── principal.py            # Immutable verified Telegram actor/chat context
 │   │   ├── polling.py              # Sequential safe polling and offset semantics
 │   │   ├── delivery.py             # Bounded Telegram retry behavior
 │   │   ├── outbox.py               # Typed durable response delivery
 │   │   ├── input_delivery.py        # Post-commit text/image delivery and binding
 │   │   ├── export_delivery.py       # In-memory delivery of durable CSV jobs
 │   │   ├── main_menu_delivery.py    # Main-menu post-commit presentation
-│   │   ├── miniapp_menu.py          # Owner-only private Mini App launch menu
+│   │   ├── miniapp_menu.py          # Per-allowlisted-user private Mini App launch menu
 │   │   ├── parser.py               # Deterministic text-input adapter
 │   │   ├── presenters.py           # Escaped Telegram presentation
 │   │   └── ui.py                   # Callback/keypad construction
@@ -134,6 +135,29 @@ The architecture test in `tests/unit/test_architecture.py` is a required enforce
 - The legacy `presentation_ref`/payload keys remain temporarily for rolling compatibility. New application code neither exposes nor relies on them.
 - OCR queue confirmation, skip, and cancel lock the exact draft and its current Telegram presentation in the same transaction before mutation and outbox enqueue.
 
+### Tenant identity and ownership boundary
+
+- `OWNER_TELEGRAM_USER_ID` remains the required primary/MCP/rollback principal. Optional
+  `TELEGRAM_ALLOWED_USER_IDS` is the complete canonical allowlist of 1..32 unique IDs and must include primary;
+  absence preserves singleton behavior.
+- `OwnerOnlyMiddleware` admits only allowlisted `event_from_user`, `chat.type == private`, and exact
+  `actor_id == chat_id`, then creates an immutable `TelegramPrincipal`. Callback code uses this scoped principal rather
+  than the callback message's bot-owned `from_user`.
+- `ensure_owner_user` creates one separate owner/catalog namespace and allows only first `NULL -> actor_id` chat
+  binding. A different later chat fails closed. Downstream repositories derive owner UUID server-side and retain
+  owner predicates across catalogs, drafts, transactions, reports, budgets, schedules, rates, imports, sessions, and
+  idempotency records.
+- Migration `0012_multitenant_integrity` performs an online fail-closed legacy scan and adds the private actor/chat
+  check plus composite ownership references for default account, category parent, audit transaction,
+  recurring/import draft, and Telegram outbox. PostgreSQL RLS is deferred until pre-auth, cleanup, recurring, outbox,
+  and process-fixed MCP roles/context can be designed as one boundary.
+- Telegram delivery performs a draft-owner/private-chat preflight before every network send for an outbox row with a
+  draft reference. A mismatch fails before Telegram I/O and remains unsent; presentation binding repeats the same
+  owner/chat predicate. This is the application guard for draft references that cannot be fully expressed by the
+  existing outbox ownership foreign key alone.
+- Shared household state, cross-user transfers, RBAC, self-registration, and destructive offboarding are outside this
+  phase. Revoking an ID retains its rows; the DB-only recurring runner does not consume the Telegram allowlist.
+
 ### OCR flow
 
 1. `OcrImageRouter` checks replay state before downloading and obtains bounded bytes through the Telegram adapter.
@@ -169,7 +193,8 @@ The architecture test in `tests/unit/test_architecture.py` is a required enforce
 1. HTTP/Mini App commands create versioned daily/weekly/monthly schedules under the owner lock; the owner timezone is
    copied once and remains immutable. Telegram exposes only a bounded overview/detail and a Mini App manage link.
 2. `SqlAlchemyRecurringRunner` materializes due instances and stages drafts in two separately committed phases with
-   distinct transaction advisory locks. Schedule and owner batches, SQL timeouts and pending probes are bounded.
+   distinct transaction advisory locks. Schedule and owner batches, SQL timeouts and pending probes are bounded;
+   materialization selects at most one nearest due schedule per owner before applying the global 32-item cap.
 3. Both phases acquire the owner row before schedule/instance/draft rows. `(schedule_id, occurrence_index)` prevents
    duplicate due work; the unstaged pending cap is 32 per owner.
 4. Staging creates only `Draft(state="review", flow="recurring")`. Any existing active draft leaves the instance
@@ -191,14 +216,37 @@ The architecture test in `tests/unit/test_architecture.py` is a required enforce
 - Uvicorn access logging and proxy-header trust are disabled. The allowlisted completion event contains only server-generated correlation ID, route template, HTTP status, latency bucket, result class, and fixed error code.
 - Swagger/ReDoc are disabled because their default pages load third-party CDN assets; `/api/v1/openapi.json` remains the backend contract source.
 - The runtime HTTP app fails closed unless `MINIAPP_PUBLIC_URL` is one exact canonical HTTPS origin and `HTTP_SECURITY_KEY` decodes to an independent 32-byte key. Test-only skeleton construction is not a production auth bypass.
-- `POST /api/v1/auth/telegram` verifies the official Telegram HMAC before parsing trusted identity fields, applies bounded `auth_date` and exact-owner checks, and denies replay by a digest derived from the verified Telegram hash rather than raw query encoding.
+- `POST /api/v1/auth/telegram` verifies the official Telegram HMAC before parsing trusted identity fields, applies
+  bounded `auth_date` and allowlist membership checks, and denies replay by a digest derived from the verified
+  Telegram hash rather than raw query encoding. Mini App startup always presents current signed `initData` before
+  trusting the WebView cookie jar; an active same-subject session may be retained, while a stale cross-subject cookie
+  is revoked and replaced only after a successful fresh proof claim.
 - Session and CSRF tokens are independent opaque values. Only domain-separated keyed digests reach PostgreSQL; the session uses a host-only `HttpOnly; Secure; SameSite=Strict` cookie and state changes additionally require the readable CSRF cookie plus exact header value.
-- Authenticated mutations must hold the web-session shared row lock in the same SQLAlchemy transaction as owner, idempotency, and domain writes. Logout takes the exclusive session lock; external response/cookie construction happens only after commit.
+- Every successful auth response returns `X-Session-Binding`, a privacy-safe domain-separated HMAC over the raw
+  HttpOnly session token. The frontend keeps it only in page memory and sends it with every protected GET,
+  mutation, and logout. The backend recomputes it from the current cookie before tenant lookup; mutation still
+  requires double-submit CSRF. A mismatch returns `401` without clearing the current cookies, so stale page A cannot
+  erase the valid session of page B in the shared WebView cookie jar.
+- `Set-Cookie` is emitted only after a successful login commits a newly created session. Same-subject session reuse
+  returns the binding without cookie rotation. Failed login, every protected error, and successful logout never emit
+  cookie deletion; logout revokes the row under its exclusive lock and returns `204` without `Set-Cookie`. The page
+  clears its in-memory binding and protected view, while the inert revoked cookie is overwritten by the next successful
+  signed login. This prevents a late response from page A from deleting page B's newer shared-jar cookie.
+- Authenticated reads, mutations, and logout re-check the session owner's current process-local allowlist membership.
+  Mutations must hold the web-session shared row lock in the same SQLAlchemy transaction as owner, idempotency, and
+  domain writes. Logout takes the exclusive session lock; new-session response/cookie construction happens only after
+  commit. One bounded ASCII Origin, if present, is untrusted metadata rather than an authorization signal.
 
 ### Mini App launch and production edge
 
-- `MiniAppMenuConfigurator` rejects a global Main Mini App and installs `MenuButtonWebApp` only for the configured
-  owner private chat; a missing chat is retried after the first `/start` or `/menu`.
+- `MiniAppMenuConfigurator` rejects a global Main Mini App, keeps the default menu inert, and installs
+  `MenuButtonWebApp` separately for each allowlisted private chat only after that user's onboarding transaction
+  commits. A missing chat is retried at a later `/start` or `/menu` without exposing a global launch surface.
+- The frontend associates every authentication attempt with a monotonic epoch and applies an async result only while
+  that epoch is current. `hidden` and every `pagehide` synchronously remove the protected UI, replace the tenant
+  QueryClient, and invalidate the epoch. If the page was authenticated, its binding remains memory-only solely for a
+  resume `/auth/me` check with the current cookie; `visible`/persisted `pageshow` never replay cached `initData`.
+  Suspending an in-flight authentication clears the binding, so failed resume requires a fresh Telegram launch.
 - `Dockerfile.web` builds source-map-free Vite output and copies only immutable `dist` plus static Nginx config into
   a pinned unprivileged image. Runtime config is rendered into tmpfs; rootfs and TLS secret mounts stay read-only.
 - `public-edge` contains only web and accepts host TCP/443. Web reaches API over separate internal `api-edge`; API
@@ -249,6 +297,9 @@ shared web-session lock -> owner row lock -> idempotency claim -> domain rows ->
 5. **Privacy by data minimization.** Sensitive payloads must not enter logs, external AI services, temporary persistent storage, healthchecks, test fixtures, or committed artifacts.
 6. **Infrastructure is replaceable, historical migrations are not.** New adapters follow current contracts; old Alembic revisions remain reproducible and must not silently depend on later mutable helpers.
 7. **One deployable until evidence says otherwise.** Prefer a well-structured monolith; split services only for demonstrated independent scaling, ownership, or failure-isolation requirements.
+8. **One verified subject, one ledger.** Never accept tenant identity from request object IDs, callback payloads, a
+   cookie without its page-scoped session binding, or client-selected owner fields; derive it from the verified
+   Telegram principal/session and preserve it in every query, lock, idempotency key, and ownership constraint.
 
 ## Code Organization Note
 

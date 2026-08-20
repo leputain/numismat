@@ -13,6 +13,7 @@ from urllib.parse import parse_qsl
 MAX_INIT_DATA_BYTES = 8192
 MAX_INIT_DATA_FIELDS = 32
 MAX_TELEGRAM_USER_ID = 2**52 - 1
+MAX_ALLOWED_TELEGRAM_USERS = 32
 AUTH_TTL_SECONDS = 300
 AUTH_FUTURE_SKEW_SECONDS = 30
 
@@ -148,7 +149,8 @@ def verify_telegram_init_data(
     init_data: str,
     *,
     bot_token: str,
-    owner_telegram_user_id: int,
+    allowed_telegram_user_ids: frozenset[int] | None = None,
+    owner_telegram_user_id: int | None = None,
     now: datetime | None = None,
 ) -> VerifiedTelegramAuth:
     """Verify Telegram's raw query payload before reading signed identity fields."""
@@ -173,7 +175,22 @@ def verify_telegram_init_data(
     verification_expires_at = datetime.fromtimestamp(auth_date + AUTH_TTL_SECONDS, tz=UTC)
     if verified_at >= verification_expires_at:
         raise TelegramAuthVerificationError(TelegramAuthReason.EXPIRED)
-    if telegram_user_id != owner_telegram_user_id:
+    if allowed_telegram_user_ids is None:
+        if owner_telegram_user_id is None:
+            raise ValueError("Telegram user allowlist is required")
+        allowed_telegram_user_ids = frozenset((owner_telegram_user_id,))
+    elif owner_telegram_user_id is not None:
+        raise ValueError("configure one Telegram user policy")
+    if (
+        type(allowed_telegram_user_ids) is not frozenset
+        or not 1 <= len(allowed_telegram_user_ids) <= MAX_ALLOWED_TELEGRAM_USERS
+        or any(
+            type(user_id) is not int or not 1 <= user_id <= MAX_TELEGRAM_USER_ID
+            for user_id in allowed_telegram_user_ids
+        )
+    ):
+        raise ValueError("Telegram user allowlist is invalid")
+    if telegram_user_id not in allowed_telegram_user_ids:
         raise TelegramAuthVerificationError(TelegramAuthReason.FOREIGN_OWNER)
     return VerifiedTelegramAuth(
         telegram_user_id=telegram_user_id,

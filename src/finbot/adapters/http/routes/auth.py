@@ -12,13 +12,19 @@ from finbot.adapters.http.auth.cookies import (
     CSRF_COOKIE,
     SESSION_COOKIE,
     InvalidCookieHeaderError,
-    clear_auth_cookies,
     parse_cookie_headers,
     set_auth_cookies,
+)
+from finbot.adapters.http.auth.request import (
+    SESSION_BINDING_HEADER,
+    SESSION_BINDING_OPENAPI_PARAMETER,
+    SESSION_BINDING_OPENAPI_RESPONSE_HEADER,
+    session_credentials,
 )
 from finbot.adapters.http.auth.service import (
     AuthOwnerUnavailableError,
     CsrfRejectedError,
+    SessionBindingMismatchError,
     SessionInvalidError,
     TelegramAuthReplayError,
     TelegramAuthService,
@@ -108,6 +114,17 @@ def _cookies(request: Request) -> dict[str, str]:
         raise HttpApiError(status_code=422, code=HttpErrorCode.VALIDATION_FAILED) from exc
 
 
+def _optional_login_session_token(request: Request) -> str:
+    raw_values = [
+        bytes(value) for key, value in request.scope.get("headers", []) if key.lower() == b"cookie"
+    ]
+    try:
+        return parse_cookie_headers(raw_values).get(SESSION_COOKIE, "")
+    except InvalidCookieHeaderError:
+        # A stale or malformed cookie is never an authority for signed Telegram login.
+        return ""
+
+
 def _csrf_header(request: Request) -> str:
     raw = _raw_header(
         request,
@@ -176,7 +193,10 @@ def _translate_verification(error: TelegramAuthVerificationError) -> HttpApiErro
     else:
         code = HttpErrorCode.TELEGRAM_AUTH_INVALID
         status = 401
-    return HttpApiError(status_code=status, code=code)
+    return HttpApiError(
+        status_code=status,
+        code=code,
+    )
 
 
 def auth_router(service: TelegramAuthService, *, expected_origin: str) -> APIRouter:
@@ -185,7 +205,14 @@ def auth_router(service: TelegramAuthService, *, expected_origin: str) -> APIRou
     @router.post(
         "/telegram",
         response_model=AuthSessionResponse,
-        responses=_error_responses(401, 403, 409, 413, 415, 422),
+        responses={
+            200: {
+                "headers": {
+                    SESSION_BINDING_HEADER: SESSION_BINDING_OPENAPI_RESPONSE_HEADER,
+                }
+            },
+            **_error_responses(401, 403, 409, 413, 415, 422),
+        },
         openapi_extra={
             "requestBody": {
                 "required": True,
@@ -213,11 +240,13 @@ def auth_router(service: TelegramAuthService, *, expected_origin: str) -> APIRou
     async def telegram_auth(request: Request) -> Response:
         try:
             # Telegram WebViews do not expose one portable browser Origin contract.
-            # Initial-login authority is signed initData, exact owner, TTL, and replay denial.
+            # Initial-login authority is signed initData, allowlist membership,
+            # TTL, and replay denial.
             # Origin remains bounded/unambiguous transport metadata.
             _validate_webview_origin_metadata(request, expected_origin=expected_origin)
             body = await _bounded_auth_body(request)
-            result = await service.login(body.initData)
+            session_token = _optional_login_session_token(request)
+            result = await service.login(body.initData, session_token)
         except TelegramAuthVerificationError as exc:
             _safe_log("http_auth_login_completed", result="rejected", reason=exc.reason.value)
             raise _translate_verification(exc) from exc
@@ -232,11 +261,13 @@ def auth_router(service: TelegramAuthService, *, expected_origin: str) -> APIRou
             raise HttpApiError(status_code=401, code=HttpErrorCode.TELEGRAM_AUTH_INVALID) from exc
 
         response = JSONResponse(_session_response(result.authenticated).model_dump(mode="json"))
-        set_auth_cookies(
-            response,
-            session_token=result.tokens.session_token,
-            csrf_token=result.tokens.csrf_token,
-        )
+        response.headers[SESSION_BINDING_HEADER] = result.session_binding
+        if result.tokens is not None:
+            set_auth_cookies(
+                response,
+                session_token=result.tokens.session_token,
+                csrf_token=result.tokens.csrf_token,
+            )
         _safe_log("http_auth_login_completed", result="success", reason="success")
         return response
 
@@ -244,18 +275,25 @@ def auth_router(service: TelegramAuthService, *, expected_origin: str) -> APIRou
         "/me",
         response_model=AuthSessionResponse,
         responses=_error_responses(401, 422),
-        openapi_extra={"security": [{"SessionCookie": []}]},
+        openapi_extra={
+            "security": [{"SessionCookie": []}],
+            "parameters": [SESSION_BINDING_OPENAPI_PARAMETER],
+        },
     )
     async def auth_me(request: Request) -> Response:
         try:
-            session_token = _cookies(request).get(SESSION_COOKIE, "")
-            authenticated = await service.read(session_token)
+            authenticated = await service.read(session_credentials(request))
+        except SessionBindingMismatchError as exc:
+            _safe_log("http_auth_session_checked", result="rejected", reason="binding_mismatch")
+            raise HttpApiError(
+                status_code=401,
+                code=HttpErrorCode.AUTH_SESSION_INVALID,
+            ) from exc
         except SessionInvalidError as exc:
             _safe_log("http_auth_session_checked", result="rejected", reason="invalid_session")
             raise HttpApiError(
                 status_code=401,
                 code=HttpErrorCode.AUTH_SESSION_INVALID,
-                clear_auth_cookies=True,
             ) from exc
         _safe_log("http_auth_session_checked", result="success", reason="success")
         return JSONResponse(_session_response(authenticated).model_dump(mode="json"))
@@ -267,36 +305,43 @@ def auth_router(service: TelegramAuthService, *, expected_origin: str) -> APIRou
         openapi_extra={
             "security": [{"SessionCookie": []}],
             "parameters": [
+                SESSION_BINDING_OPENAPI_PARAMETER,
                 {
                     "in": "header",
                     "name": "X-CSRF-Token",
                     "required": True,
                     "schema": {"maxLength": 43, "minLength": 43, "type": "string"},
-                }
+                },
             ],
         },
     )
     async def auth_logout(request: Request) -> Response:
         _validate_webview_origin_metadata(request, expected_origin=expected_origin)
+        session = session_credentials(request)
         cookies = _cookies(request)
         try:
             await service.logout(
-                cookies.get(SESSION_COOKIE, ""),
+                session.session_token,
+                session.session_binding,
                 cookies.get(CSRF_COOKIE, ""),
                 _csrf_header(request),
             )
         except CsrfRejectedError as exc:
             _safe_log("http_auth_logout_completed", result="rejected", reason="csrf_failed")
             raise HttpApiError(status_code=403, code=HttpErrorCode.CSRF_FAILED) from exc
+        except SessionBindingMismatchError as exc:
+            _safe_log("http_auth_logout_completed", result="rejected", reason="binding_mismatch")
+            raise HttpApiError(
+                status_code=401,
+                code=HttpErrorCode.AUTH_SESSION_INVALID,
+            ) from exc
         except SessionInvalidError as exc:
             _safe_log("http_auth_logout_completed", result="rejected", reason="invalid_session")
             raise HttpApiError(
                 status_code=401,
                 code=HttpErrorCode.AUTH_SESSION_INVALID,
-                clear_auth_cookies=True,
             ) from exc
         response = Response(status_code=204)
-        clear_auth_cookies(response)
         _safe_log("http_auth_logout_completed", result="success", reason="success")
         return response
 

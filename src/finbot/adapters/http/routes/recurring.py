@@ -9,12 +9,20 @@ from fastapi import APIRouter, Path, Request
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 
-from finbot.adapters.http.auth.service import CsrfRejectedError, SessionInvalidError
+from finbot.adapters.http.auth.request import (
+    SESSION_BINDING_OPENAPI_PARAMETER,
+    session_credentials,
+)
+from finbot.adapters.http.auth.service import (
+    CsrfRejectedError,
+    SessionBindingMismatchError,
+    SessionCredentials,
+    SessionInvalidError,
+)
 from finbot.adapters.http.errors import HttpApiError, HttpErrorCode
 from finbot.adapters.http.finance.request import (
     CANONICAL_UUID_PATTERN,
     canonical_uuid,
-    session_token,
     strict_query,
 )
 from finbot.adapters.http.mutations.request import bounded_json_body, mutation_credentials
@@ -60,13 +68,17 @@ from finbot.application.recurring import RecurringInstanceSnapshot, RecurringSch
 from finbot.domain.recurrence import RecurrenceCadence
 from finbot.domain.transactions import TransactionType
 
-_SESSION_SECURITY: dict[str, Any] = {"security": [{"SessionCookie": []}]}
+_SESSION_SECURITY: dict[str, Any] = {
+    "security": [{"SessionCookie": []}],
+    "parameters": [SESSION_BINDING_OPENAPI_PARAMETER],
+}
 _CANONICAL_DIGEST_PATTERN = r"^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
 _CURSOR = re.compile(rf"[A-Za-z0-9_-]{{{RECURRING_CURSOR_LENGTH}}}\Z")
 _LIMIT = re.compile(r"(?:[1-9]|[1-4][0-9]|50)\Z")
 _SCHEDULE_QUERY = frozenset({"deleted", "limit", "cursor"})
 _INSTANCE_QUERY = frozenset({"limit", "cursor"})
 _MUTATION_PARAMETERS: list[dict[str, Any]] = [
+    SESSION_BINDING_OPENAPI_PARAMETER,
     {
         "description": (
             "Optional bounded transport metadata supplied by the user agent; "
@@ -163,15 +175,19 @@ def _fields(
 
 async def _safe_read[ResultT](
     request: Request,
-    operation: Callable[[str], Awaitable[ResultT]],
+    operation: Callable[[SessionCredentials], Awaitable[ResultT]],
 ) -> ResultT:
     try:
-        return await operation(session_token(request))
+        return await operation(session_credentials(request))
+    except SessionBindingMismatchError as exc:
+        raise HttpApiError(
+            status_code=401,
+            code=HttpErrorCode.AUTH_SESSION_INVALID,
+        ) from exc
     except SessionInvalidError as exc:
         raise HttpApiError(
             status_code=401,
             code=HttpErrorCode.AUTH_SESSION_INVALID,
-            clear_auth_cookies=True,
         ) from exc
     except InvalidRecurringCursorError as exc:
         raise HttpApiError(status_code=422, code=HttpErrorCode.INVALID_CURSOR) from exc
@@ -182,11 +198,15 @@ async def _safe_mutation(operation: Callable[[], Awaitable[MutationReceipt]]) ->
         return await operation()
     except CsrfRejectedError as exc:
         raise HttpApiError(status_code=403, code=HttpErrorCode.CSRF_FAILED) from exc
+    except SessionBindingMismatchError as exc:
+        raise HttpApiError(
+            status_code=401,
+            code=HttpErrorCode.AUTH_SESSION_INVALID,
+        ) from exc
     except SessionInvalidError as exc:
         raise HttpApiError(
             status_code=401,
             code=HttpErrorCode.AUTH_SESSION_INVALID,
-            clear_auth_cookies=True,
         ) from exc
     except IdempotencyKeyReuseError as exc:
         raise HttpApiError(
@@ -258,14 +278,17 @@ def recurring_router(service: HttpRecurringService, *, expected_origin: str) -> 
         "/api/v1/recurring-schedules",
         response_model=RecurringSchedulePageResponse,
         responses=_error_responses(401, 422, 500),
-        openapi_extra={**_SESSION_SECURITY, "parameters": list_parameters},
+        openapi_extra={
+            **_SESSION_SECURITY,
+            "parameters": [SESSION_BINDING_OPENAPI_PARAMETER, *list_parameters],
+        },
     )
     async def list_recurring_schedules(request: Request) -> RecurringSchedulePageResponse:
         query = strict_query(request, allowed=_SCHEDULE_QUERY)
 
-        async def execute(raw_session: str) -> HttpRecurringSchedulePage:
+        async def execute(credentials: SessionCredentials) -> HttpRecurringSchedulePage:
             return await service.list_schedules(
-                raw_session,
+                credentials,
                 deleted=_deleted(query.get("deleted")),
                 limit=_limit(query.get("limit")),
                 raw_cursor=_cursor(query.get("cursor")),
@@ -293,7 +316,7 @@ def recurring_router(service: HttpRecurringService, *, expected_origin: str) -> 
         responses=_error_responses(401, 404, 422, 500),
         openapi_extra={
             **_SESSION_SECURITY,
-            "parameters": list_parameters[1:],
+            "parameters": [SESSION_BINDING_OPENAPI_PARAMETER, *list_parameters[1:]],
         },
     )
     async def list_recurring_instances(
@@ -306,9 +329,9 @@ def recurring_router(service: HttpRecurringService, *, expected_origin: str) -> 
         query = strict_query(request, allowed=_INSTANCE_QUERY)
         parsed_id = canonical_uuid(schedule_id)
 
-        async def execute(raw_session: str) -> HttpRecurringInstancePage:
+        async def execute(credentials: SessionCredentials) -> HttpRecurringInstancePage:
             return await service.list_instances(
-                raw_session,
+                credentials,
                 parsed_id,
                 limit=_limit(query.get("limit")),
                 raw_cursor=_cursor(query.get("cursor")),
@@ -332,8 +355,8 @@ def recurring_router(service: HttpRecurringService, *, expected_origin: str) -> 
         strict_query(request, allowed=frozenset())
         parsed_id = canonical_uuid(schedule_id)
 
-        async def execute(raw_session: str) -> RecurringScheduleSnapshot:
-            return await service.get_schedule(raw_session, parsed_id)
+        async def execute(credentials: SessionCredentials) -> RecurringScheduleSnapshot:
+            return await service.get_schedule(credentials, parsed_id)
 
         return schedule_response(await _safe_read(request, execute))
 
@@ -430,8 +453,8 @@ def recurring_router(service: HttpRecurringService, *, expected_origin: str) -> 
         strict_query(request, allowed=frozenset())
         parsed_id = canonical_uuid(instance_id)
 
-        async def execute(raw_session: str) -> RecurringInstanceSnapshot:
-            return await service.get_instance(raw_session, parsed_id)
+        async def execute(credentials: SessionCredentials) -> RecurringInstanceSnapshot:
+            return await service.get_instance(credentials, parsed_id)
 
         return instance_response(await _safe_read(request, execute))
 

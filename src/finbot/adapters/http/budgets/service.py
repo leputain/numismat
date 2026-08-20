@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from finbot.adapters.database.repositories.http_idempotency import IdempotencyResultKind
 from finbot.adapters.http.auth.crypto import HttpSecurityDigester
-from finbot.adapters.http.auth.service import SessionAuthenticator
+from finbot.adapters.http.auth.service import SessionAuthenticator, SessionCredentials
 from finbot.adapters.http.budgets.cursor import BudgetCursorCodec
 from finbot.adapters.http.budgets.ports import BudgetQueryUnitOfWorkFactory
 from finbot.adapters.http.mutations.ports import MutationUnitOfWork
@@ -122,9 +122,10 @@ class HttpBudgetService:
         cursor_codec: BudgetCursorCodec,
         query_uow_factory: BudgetQueryUnitOfWorkFactory,
         mutation_executor: HttpMutationExecutor,
+        allowed_telegram_user_ids: frozenset[int] | None = None,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
-        self._authenticator = SessionAuthenticator(digester)
+        self._authenticator = SessionAuthenticator(digester, allowed_telegram_user_ids)
         self._cursor_codec = cursor_codec
         self._query_uow_factory = query_uow_factory
         self._mutation_executor = mutation_executor
@@ -138,7 +139,7 @@ class HttpBudgetService:
 
     async def list(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         *,
         window_start: date | None,
         window_end: date | None,
@@ -150,7 +151,7 @@ class HttpBudgetService:
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             if (window_start is None) != (window_end is None):
@@ -205,14 +206,14 @@ class HttpBudgetService:
 
     async def get(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         budget_id: UUID,
     ) -> BudgetProgressSnapshot:
         now = self._now()
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             return await GetBudgetProgress(uow.budgets)(

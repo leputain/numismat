@@ -233,6 +233,7 @@ def _upload_headers(
         "Cookie": f"{SESSION_COOKIE}={session_token}; {CSRF_COOKIE}={csrf_token}",
         "Origin": ORIGIN,
         "X-CSRF-Token": csrf_token,
+        "X-Session-Binding": HttpSecurityDigester(HTTP_SECURITY_KEY).session_binding(session_token),
         "Idempotency-Key": idempotency_key,
     }
 

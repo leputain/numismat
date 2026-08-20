@@ -2,9 +2,15 @@
 
 ## Product
 
-Finbot — русскоязычный single-owner сервис личного учёта доходов и расходов. Telegram adapter работает отдельным
-long-polling процессом, а owner-only FastAPI adapter — отдельным ASGI process над тем же application API и PostgreSQL.
-Оба контура обслуживают только configured numeric owner; Telegram дополнительно требует личный чат.
+Finbot — русскоязычный закрытый сервис личного учёта доходов и расходов для bounded allowlist до 32 пользователей.
+Telegram adapter работает отдельным long-polling процессом, а tenant-scoped FastAPI adapter — отдельным ASGI process
+над тем же application API и PostgreSQL. Каждый разрешённый numeric Telegram principal получает независимые счета,
+категории, drafts, transactions, budgets, schedules, rates, imports, sessions и idempotency namespace. Общего ledger,
+cross-user операций, RBAC и самостоятельной регистрации нет.
+
+`OWNER_TELEGRAM_USER_ID` остаётся обязательным primary/MCP principal. Необязательный
+`TELEGRAM_ALLOWED_USER_IDS` задаёт полный comma-separated список из 1..32 уникальных canonical ID и обязан включать
+primary; пустое значение сохраняет legacy singleton. Telegram принимает только private chat с `actor_id == chat_id`.
 
 Defaults: `ru_RU`, `RUB`, `Europe/Moscow`, счёт `Основная карта`. В настройках доступны основной счёт, timezone и
 управление справочниками. Режима сохранения без проверки нет: legacy-колонка `fast_mode`, пока она существует для
@@ -64,12 +70,13 @@ batch целиком. Telegram document ingress использует тольк�
 DST выбирает первый fold, gap сдвигается к первому существующему локальному времени. Каждая due-точка имеет
 уникальный `(schedule, occurrence_index)` instance. DB-only runner работает двумя короткими транзакционными фазами,
 использует advisory locks и bounded batches, берёт owner lock до staging и допускает максимум 32 unstaged pending
-instances на владельца.
+instances на владельца. Materialization выбирает максимум одну ближайшую due-схему на владельца за tick, чтобы один
+tenant не монополизировал общий лимит 32.
 
 Runner никогда не создаёт transaction: он создаёт обычный `review` draft с `flow=recurring`. Если любой active draft
 уже существует, instance остаётся pending и получает bounded backoff — hidden intent, suspend, replace и auto-confirm
 запрещены. Confirm связывает новую transaction с instance и `source=recurring`; cancel удаляет draft, а instance
-показывается как dismissed. Telegram даёт bounded список/detail и owner-only Mini App link; Mini App предоставляет
+показывается как dismissed. Telegram даёт bounded список/detail и персональную Mini App link; Mini App предоставляет
 CRUD, pause/resume/delete/restore и bounded instance history с skip/retry.
 
 ### Опциональное AI-предложение
@@ -131,11 +138,21 @@ CSV содержит все активные операции и колонки:
 
 ## HTTP API backend
 
-Versioned `/api/v1` использует проверенный Telegram Mini App `initData` только для выдачи одночасовой opaque
-cookie-session exact configured owner. HMAC проверяется до разбора identity; signed proof нельзя повторить. Protected
-mutation требует host-only session cookie, double-submit CSRF и canonical owner-wide `Idempotency-Key`; один bounded
-ASCII Origin, если WebView его передал, остаётся только transport metadata. Session lock, owner lock, idempotency claim,
-domain write и completion принадлежат одной транзакции.
+Versioned `/api/v1` при каждом запуске Mini App сначала проверяет текущий Telegram `initData`, а уже затем рассматривает
+cookie-session. HMAC и bounded `auth_date` проверяются до разбора identity; subject обязан входить в process-local
+allowlist. Активная cookie того же verified пользователя может быть сохранена без повторного consume proof; cookie
+другого пользователя отзывается и заменяется только после успешного fresh proof claim. Иной replay signed proof
+отклоняется. Каждый успешный auth response возвращает `X-Session-Binding`, вычисленный как domain-separated HMAC от
+raw HttpOnly session token. Страница хранит binding только в памяти и обязана отправлять его с каждым protected
+GET/write/logout; backend сверяет его с текущей cookie до tenant lookup. Protected mutation дополнительно требует
+double-submit CSRF и canonical owner-scoped `Idempotency-Key`; один bounded однозначный ASCII Origin, если WebView его
+передал, остаётся только transport metadata и не является authority. Session lock, owner lock, idempotency claim,
+domain write и completion принадлежат одной транзакции. Membership текущей сессии повторно проверяется на каждом
+read/write/logout. Binding старой страницы A при уже заменённой cookie B получает `401` без очистки валидных cookies B.
+`Set-Cookie` разрешён только успешному login, создающему новую session; same-subject session reuse возвращает binding
+без rotation. Failed auth и любой protected error не меняют browser cookies. Successful logout под exclusive lock
+отзывает session server-side и отвечает `204` без `Set-Cookie`; frontend удаляет in-memory binding и protected view,
+а оставшаяся невалидная cookie не предоставляет authority и перезаписывается следующим успешным signed login.
 
 Read API содержит dashboard, today/period/comparison reports, bounded owner-local day/week/month timeseries, active
 transaction keyset list, owner-scoped detail и complete-but-bounded accounts/categories. Minor units передаются
@@ -161,16 +178,24 @@ canonical JSON без environment, secrets, database или network access; Swag
 
 ## Telegram Mini App UI и запуск
 
-React Mini App использует только same-origin `/api/v1`: raw Telegram `initData` передаётся ровно один раз в auth POST
-и не попадает в storage, URL или telemetry. После cookie bootstrap доступны mobile-first overview,
+React Mini App использует только same-origin `/api/v1`: raw Telegram `initData` предъявляется в auth POST при каждом
+запуске до доверия к cookie и не попадает в storage, URL или telemetry. Только неизвестный из-за network/`5xx`
+результат допускает одну bounded повторную auth-попытку с тем же proof. Перед subject rebinding очищается защищённый
+query cache. Каждая auth-попытка имеет монотонную epoch: завершившийся async result применяется только к всё ещё
+актуальной попытке. `hidden` и любой `pagehide` синхронно скрывают protected UI, заменяют tenant QueryClient и
+инвалидируют epoch. Если страница уже была authenticated, её binding остаётся только в памяти для одного resume-check:
+`visible`/persisted `pageshow` вызывает исключительно `/auth/me` с прежней парой cookie+binding и никогда не повторяет
+сохранённый `initData`. Suspend во время незавершённой auth очищает binding; неуспешный resume требует reopen и fresh
+Telegram launch. После успешного bootstrap доступны mobile-first overview,
 currency-isolated analytics/timeseries, today/month summary, active transaction history/detail, trash и единый
 persistent draft review/create/edit/repeat flow. Любая новая transaction
 по-прежнему появляется только через явный confirm; Telegram и HTTP разделяют один draft UUID/revision.
 
-Launch button устанавливается Bot API только для exact numeric owner private chat. Default menu не открывает Web App,
-а глобальный BotFather Main Mini App запрещён и останавливает startup. Если владелец ещё не открыл bot chat, установка
-лениво повторяется на `/start` или `/menu`. Telegram mobile reconnect повторяет mutation только с тем же
-`Idempotency-Key`; unknown outcome не создаёт второй draft/transaction.
+Launch button устанавливается Bot API отдельно для private chat каждого allowlisted пользователя и только после
+commit его onboarding через `/start` или `/menu`. Default menu не открывает Web App, а глобальный BotFather Main Mini
+App запрещён и останавливает startup. Отсутствующий private chat не ломает startup: установка повторяется при
+следующем `/start` или `/menu`. Telegram mobile reconnect повторяет mutation только с тем же `Idempotency-Key`;
+unknown outcome не создаёт второй draft/transaction.
 
 Production edge принимает единственный HTTPS DNS Host, отдаёт source-map-free SPA и immutable hashed assets,
 проксирует `/api/*` и health к internal API без retry/forwarded identity и возвращает fixed error envelope. HTML и SPA
@@ -204,6 +229,16 @@ category rules, recurring schedules/instances, processed updates, audit events, 
 bounded web sessions и HTTP
 idempotency records. Raw Telegram updates после обработки не сохраняются.
 
+Alembic `0012_multitenant_integrity` перед созданием constraints берёт table locks и fail closed проверяет legacy
+данные. Composite FK запрещают cross-owner ссылки для default account, parent category, audit transaction,
+recurring/import draft и Telegram outbox; user/chat binding допускает только неизменяемый private
+`telegram_chat_id == telegram_user_id`. RLS не входит в этот этап: tenant isolation задаётся server-side subject,
+owner-scoped repositories и database ownership constraints.
+
+До любого Telegram network I/O outbox delivery проверяет связанный `draft_id` через owner и immutable private chat
+из outbox row. Несовпадение останавливает delivery без отправки и без `sent_at`; presentation binding повторяет ту же
+owner/chat проверку, поэтому forged или legacy cross-tenant draft reference не может стать UI другого пользователя.
+
 ## Layers
 
 `domain` и `application` не импортируют aiogram, FastAPI/Pydantic HTTP, SQLAlchemy или `finbot.adapters`. Application
@@ -213,12 +248,17 @@ idempotency records. Raw Telegram updates после обработки не с�
 ## Reliability, privacy and operations
 
 Polling обрабатывает один update за раз, увеличивает Telegram offset только после успеха и повторяет failed update с
-bounded backoff. Owner/private authorization выполняется до handlers. Idempotency не допускает повторного business
+bounded backoff. Allowlist/private actor authorization выполняется до handlers. Idempotency не допускает повторного business
 write для одного `update_id`; durable outbox закрывает crash gap между финансовым commit и receipt.
 
 JSON logs являются allowlist API: разрешены только безопасные event codes и bounded metadata. Free-form messages,
 exception text, traceback, SQL, Telegram IDs/payloads, суммы, описания, категории, account names, token, credentials и
 URLs не сериализуются.
+
+Allowlist загружается при старте `bot` и `api`. Удаление ID и одновременный restart обоих процессов прекращает новый
+Telegram/HTTP доступ и инвалидирует существующую HTTP session при следующей проверке, но не удаляет tenant data.
+`recurring-runner` намеренно не получает Telegram policy и продолжает materialize/stage сохранённые активные
+расписания; operator обязан сначала pause-нуть их либо остановить runner. Полное offboarding/delete не входит в V1.
 
 Production bot, API и web edge работают отдельными non-root containers с read-only rootfs, tmpfs, dropped
 capabilities, no-new-privileges, без Docker socket и без published PostgreSQL port. API публикуется только во
@@ -243,6 +283,7 @@ lockfile; generated API types обязаны совпадать с canonical off
 
 ## Non-goals
 
-Нет external AI parser/OpenAI API, voice, прямой банковской/API-интеграции, инвестиций, семейного доступа, Redis,
-Celery, Kafka, Prometheus, OpenTelemetry Collector или Sentry. Telegram Web iframe не входит в M3; OCR намеренно
-является локальным и детерминированным. Optional Ollama не является fallback и доступен только через явную `/ai`.
+Нет external AI parser/OpenAI API, voice, прямой банковской/API-интеграции, инвестиций, общего семейного ledger,
+cross-user transfers, RBAC, self-registration, destructive offboarding, Redis, Celery, Kafka, Prometheus,
+OpenTelemetry Collector или Sentry. Telegram Web iframe не входит в M3; OCR намеренно является локальным и
+детерминированным. Optional Ollama не является fallback и доступен только через явную `/ai`.

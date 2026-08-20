@@ -37,6 +37,8 @@ def test_http_server_fails_closed_without_http_auth_configuration() -> None:
     settings = Settings(
         telegram_bot_token="123456:synthetic_test_token",
         owner_telegram_user_id=42,
+        miniapp_public_url=None,
+        http_security_key=None,
     )
 
     try:

@@ -9,11 +9,11 @@ from pydantic import TypeAdapter, ValidationError
 
 from finbot.adapters.http.auth.cookies import (
     CSRF_COOKIE,
-    SESSION_COOKIE,
     InvalidCookieHeaderError,
     parse_cookie_headers,
 )
 from finbot.adapters.http.auth.crypto import is_canonical_opaque_token
+from finbot.adapters.http.auth.request import session_credentials
 from finbot.adapters.http.errors import HttpApiError, HttpErrorCode
 from finbot.adapters.http.mutations.service import MutationCredentials
 
@@ -106,6 +106,7 @@ def _validate_webview_origin_metadata(request: Request, *, expected_origin: str)
 def mutation_credentials(request: Request, *, expected_origin: str) -> MutationCredentials:
     _validate_webview_origin_metadata(request, expected_origin=expected_origin)
 
+    session = session_credentials(request)
     cookies = _cookies(request)
     csrf_header = _ascii_header(
         request,
@@ -124,7 +125,8 @@ def mutation_credentials(request: Request, *, expected_origin: str) -> MutationC
     if not is_canonical_opaque_token(idempotency_key):
         raise HttpApiError(status_code=422, code=HttpErrorCode.VALIDATION_FAILED)
     return MutationCredentials(
-        session_token=cookies.get(SESSION_COOKIE, ""),
+        session_token=session.session_token,
+        session_binding=session.session_binding,
         csrf_cookie=cookies.get(CSRF_COOKIE, ""),
         csrf_header=csrf_header,
         idempotency_key=idempotency_key,

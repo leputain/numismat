@@ -9,7 +9,16 @@ from fastapi import APIRouter, Path, Request
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 
-from finbot.adapters.http.auth.service import CsrfRejectedError, SessionInvalidError
+from finbot.adapters.http.auth.request import (
+    SESSION_BINDING_OPENAPI_PARAMETER,
+    session_credentials,
+)
+from finbot.adapters.http.auth.service import (
+    CsrfRejectedError,
+    SessionBindingMismatchError,
+    SessionCredentials,
+    SessionInvalidError,
+)
 from finbot.adapters.http.bank_imports.cursor import (
     BANK_IMPORT_BATCH_CURSOR_LENGTH,
     BANK_IMPORT_ROW_CURSOR_LENGTH,
@@ -26,7 +35,6 @@ from finbot.adapters.http.errors import HttpApiError, HttpErrorCode
 from finbot.adapters.http.finance.request import (
     CANONICAL_UUID_PATTERN,
     canonical_uuid,
-    session_token,
     strict_query,
 )
 from finbot.adapters.http.mutations.request import bounded_json_body, mutation_credentials
@@ -67,7 +75,10 @@ from finbot.application.bank_imports import (
     ReconciliationCandidate,
 )
 
-_SESSION_SECURITY: dict[str, Any] = {"security": [{"SessionCookie": []}]}
+_SESSION_SECURITY: dict[str, Any] = {
+    "security": [{"SessionCookie": []}],
+    "parameters": [SESSION_BINDING_OPENAPI_PARAMETER],
+}
 _CANONICAL_DIGEST_PATTERN = r"^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
 _LIMIT = re.compile(r"(?:[1-9]|[1-4][0-9]|50)\Z")
 _VERSION = re.compile(r"[1-9][0-9]{0,9}\Z")
@@ -77,6 +88,7 @@ _LIST_BATCH_QUERY = frozenset({"state", "limit", "cursor"})
 _LIST_ROW_QUERY = frozenset({"state", "limit", "cursor"})
 _UPLOAD_QUERY = frozenset({"account_id", "account_version", "profile"})
 _MUTATION_PARAMETERS: list[dict[str, Any]] = [
+    SESSION_BINDING_OPENAPI_PARAMETER,
     {
         "description": (
             "Optional bounded transport metadata supplied by the user agent; "
@@ -222,15 +234,19 @@ def _cursor(value: str | None, pattern: re.Pattern[str]) -> str | None:
 
 async def _safe_read[ResultT](
     request: Request,
-    operation: Callable[[str], Awaitable[ResultT]],
+    operation: Callable[[SessionCredentials], Awaitable[ResultT]],
 ) -> ResultT:
     try:
-        return await operation(session_token(request))
+        return await operation(session_credentials(request))
+    except SessionBindingMismatchError as exc:
+        raise HttpApiError(
+            status_code=401,
+            code=HttpErrorCode.AUTH_SESSION_INVALID,
+        ) from exc
     except SessionInvalidError as exc:
         raise HttpApiError(
             status_code=401,
             code=HttpErrorCode.AUTH_SESSION_INVALID,
-            clear_auth_cookies=True,
         ) from exc
     except InvalidBankImportCursorError as exc:
         raise HttpApiError(status_code=422, code=HttpErrorCode.INVALID_CURSOR) from exc
@@ -245,7 +261,11 @@ async def _safe_admission(operation: Callable[[], Awaitable[UUID]]) -> UUID:
         raise HttpApiError(
             status_code=401,
             code=HttpErrorCode.AUTH_SESSION_INVALID,
-            clear_auth_cookies=True,
+        ) from exc
+    except SessionBindingMismatchError as exc:
+        raise HttpApiError(
+            status_code=401,
+            code=HttpErrorCode.AUTH_SESSION_INVALID,
         ) from exc
 
 
@@ -254,11 +274,15 @@ async def _safe_mutation(operation: Callable[[], Awaitable[MutationReceipt]]) ->
         return await operation()
     except CsrfRejectedError as exc:
         raise HttpApiError(status_code=403, code=HttpErrorCode.CSRF_FAILED) from exc
+    except SessionBindingMismatchError as exc:
+        raise HttpApiError(
+            status_code=401,
+            code=HttpErrorCode.AUTH_SESSION_INVALID,
+        ) from exc
     except SessionInvalidError as exc:
         raise HttpApiError(
             status_code=401,
             code=HttpErrorCode.AUTH_SESSION_INVALID,
-            clear_auth_cookies=True,
         ) from exc
     except IdempotencyKeyReuseError as exc:
         raise HttpApiError(
@@ -321,9 +345,9 @@ def bank_import_router(service: HttpBankImportService, *, expected_origin: str) 
         query = strict_query(request, allowed=_LIST_BATCH_QUERY)
         state = _batch_state(query.get("state"))
 
-        async def execute(raw_session: str) -> HttpBankImportBatchPage:
+        async def execute(credentials: SessionCredentials) -> HttpBankImportBatchPage:
             return await service.list_batches(
-                raw_session,
+                credentials,
                 state=state,
                 limit=_limit(query.get("limit")),
                 raw_cursor=_cursor(query.get("cursor"), _BATCH_CURSOR),
@@ -344,8 +368,8 @@ def bank_import_router(service: HttpBankImportService, *, expected_origin: str) 
         strict_query(request, allowed=frozenset())
         parsed_batch = canonical_uuid(batch_id)
 
-        async def execute(raw_session: str) -> BankImportBatchSnapshot:
-            return await service.get_batch(raw_session, parsed_batch)
+        async def execute(credentials: SessionCredentials) -> BankImportBatchSnapshot:
+            return await service.get_batch(credentials, parsed_batch)
 
         return bank_import_batch_response(await _safe_read(request, execute))
 
@@ -363,9 +387,9 @@ def bank_import_router(service: HttpBankImportService, *, expected_origin: str) 
         parsed_batch = canonical_uuid(batch_id)
         state = _row_state(query.get("state"))
 
-        async def execute(raw_session: str) -> HttpBankImportRowPage:
+        async def execute(credentials: SessionCredentials) -> HttpBankImportRowPage:
             return await service.list_rows(
-                raw_session,
+                credentials,
                 parsed_batch,
                 state=state,
                 limit=_limit(query.get("limit")),
@@ -393,8 +417,8 @@ def bank_import_router(service: HttpBankImportService, *, expected_origin: str) 
     ) -> BankImportRowResponse:
         parsed_batch, parsed_row = parsed_row_ids(request, batch_id, row_id)
 
-        async def execute(raw_session: str) -> BankImportRowSnapshot:
-            return await service.get_row(raw_session, parsed_batch, parsed_row)
+        async def execute(credentials: SessionCredentials) -> BankImportRowSnapshot:
+            return await service.get_row(credentials, parsed_batch, parsed_row)
 
         return bank_import_row_response(await _safe_read(request, execute))
 
@@ -411,8 +435,10 @@ def bank_import_router(service: HttpBankImportService, *, expected_origin: str) 
     ) -> ReconciliationCandidatesResponse:
         parsed_batch, parsed_row = parsed_row_ids(request, batch_id, row_id)
 
-        async def execute(raw_session: str) -> tuple[ReconciliationCandidate, ...]:
-            return await service.candidates(raw_session, parsed_batch, parsed_row)
+        async def execute(
+            credentials: SessionCredentials,
+        ) -> tuple[ReconciliationCandidate, ...]:
+            return await service.candidates(credentials, parsed_batch, parsed_row)
 
         return reconciliation_candidates_response(await _safe_read(request, execute))
 

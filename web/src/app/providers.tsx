@@ -19,7 +19,11 @@ export const apiClient = new SameOriginApiClient({
 export const appAuthCoordinator = new AuthCoordinator({
   api: createAuthApi(apiClient),
   telegram: telegramMiniApp,
-  clearProtectedState: () => appQueryClient.clear(),
+  clearProtectedView: () => appQueryClient.clear(),
+  clearProtectedState: () => {
+    apiClient.clearProtectedSessionBinding();
+    appQueryClient.clear();
+  },
 });
 coordinatorReference.current = appAuthCoordinator;
 

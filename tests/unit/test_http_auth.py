@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import io
 import json
 import logging
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlencode
 from uuid import uuid7
 
@@ -25,10 +26,16 @@ from finbot.adapters.http.auth.crypto import HttpSecurityDigester, OpaqueAuthTok
 from finbot.adapters.http.auth.ports import (
     AuthenticatedSession,
     AuthOwner,
+    AuthPersistence,
     SessionCheck,
     SessionCheckStatus,
 )
-from finbot.adapters.http.auth.service import TelegramAuthService
+from finbot.adapters.http.auth.service import (
+    SessionAuthenticator,
+    SessionCredentials,
+    SessionInvalidError,
+    TelegramAuthService,
+)
 from finbot.adapters.http.auth.telegram import (
     AUTH_FUTURE_SKEW_SECONDS,
     AUTH_TTL_SECONDS,
@@ -41,11 +48,17 @@ from finbot.observability.logging import JsonFormatter
 
 BOT_TOKEN = "123456:synthetic-unit-token"
 OWNER_ID = 424_242
+SECOND_OWNER_ID = 424_243
+FOREIGN_OWNER_ID = 424_244
 NOW = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
 ORIGIN = "https://miniapp.example.test"
 SECURITY_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 SESSION_TOKEN = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
 CSRF_TOKEN = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+
+
+def _opaque_token(value: int) -> str:
+    return base64.urlsafe_b64encode(bytes((value,)) * 32).rstrip(b"=").decode("ascii")
 
 
 def _signed_init_data(
@@ -92,6 +105,29 @@ def test_telegram_init_data_accepts_official_hmac_and_signature_field() -> None:
     )
     assert BOT_TOKEN not in repr(verified)
     assert value not in repr(verified)
+
+
+def test_telegram_init_data_accepts_allowlisted_users_and_rejects_foreign_user() -> None:
+    allowed = frozenset((OWNER_ID, SECOND_OWNER_ID))
+
+    for telegram_user_id in allowed:
+        verified = verify_telegram_init_data(
+            _signed_init_data(user={"id": telegram_user_id}),
+            bot_token=BOT_TOKEN,
+            allowed_telegram_user_ids=allowed,
+            now=NOW,
+        )
+        assert verified.telegram_user_id == telegram_user_id
+
+    with pytest.raises(TelegramAuthVerificationError) as caught:
+        verify_telegram_init_data(
+            _signed_init_data(user={"id": FOREIGN_OWNER_ID}),
+            bot_token=BOT_TOKEN,
+            allowed_telegram_user_ids=allowed,
+            now=NOW,
+        )
+
+    assert caught.value.reason is TelegramAuthReason.FOREIGN_OWNER
 
 
 @pytest.mark.parametrize(
@@ -241,6 +277,14 @@ class FakeAuthPersistence:
     csrf_matches: bool = True
 
     async def find_owner(self, _telegram_user_id: int) -> AuthOwner | None:
+        if self.owner.telegram_user_id == 0:
+            self.owner = AuthOwner(
+                self.owner.owner_id,
+                self.owner.locale,
+                self.owner.timezone,
+                self.owner.base_currency,
+                _telegram_user_id,
+            )
         return self.owner
 
     async def claim_auth_proof(
@@ -273,6 +317,14 @@ class FakeAuthPersistence:
             return SessionCheck(status=SessionCheckStatus.INVALID)
         return SessionCheck(status=SessionCheckStatus.ACTIVE, authenticated=self.active)
 
+    async def lock_session_for_login(self, _token: Any, **_kwargs: Any) -> SessionCheck:
+        return await self.read_session(_token, **_kwargs)
+
+    async def revoke_session_for_login(self, _token: Any, **_kwargs: Any) -> None:
+        checked = await self.read_session(_token, **_kwargs)
+        if checked.status is SessionCheckStatus.ACTIVE:
+            self.revoked = True
+
     async def lock_session_for_mutation(
         self, _token: Any, _csrf: Any, **_kwargs: Any
     ) -> SessionCheck:
@@ -290,12 +342,96 @@ class FakeAuthPersistence:
 
 
 class FakeUow:
-    def __init__(self, persistence: FakeAuthPersistence) -> None:
+    def __init__(self, persistence: Any) -> None:
         self.persistence = persistence
 
     @asynccontextmanager
     async def __call__(self) -> Any:
         yield self.persistence
+
+
+@dataclass
+class MultiOwnerAuthPersistence:
+    owners: dict[int, AuthOwner]
+    sessions: dict[bytes, AuthenticatedSession] = field(default_factory=dict)
+    claim_status: IdempotencyClaimStatus = IdempotencyClaimStatus.NEW
+    claim_count: int = 0
+    completed_count: int = 0
+    revoked_for_login: list[bytes] = field(default_factory=list)
+
+    async def find_owner(self, telegram_user_id: int) -> AuthOwner | None:
+        return self.owners.get(telegram_user_id)
+
+    async def create_session(
+        self, owner_id: Any, session_token: Any, _csrf_token: Any, **kwargs: Any
+    ) -> None:
+        owner = next(owner for owner in self.owners.values() if owner.owner_id == owner_id)
+        self.sessions[session_token.database_value()] = AuthenticatedSession(
+            owner=owner,
+            expires_at=kwargs["expires_at"],
+        )
+
+    async def claim_auth_proof(
+        self, _owner_id: Any, _key: Any, _fingerprint: Any, **_kwargs: Any
+    ) -> IdempotencyClaim:
+        self.claim_count += 1
+        result = None
+        if self.claim_status is IdempotencyClaimStatus.REPLAY:
+            from finbot.adapters.database.repositories.http_idempotency import (
+                IdempotencyResult,
+                IdempotencyResultKind,
+            )
+
+            result = IdempotencyResult(http_status=200, kind=IdempotencyResultKind.NONE)
+        return IdempotencyClaim(uuid7(), self.claim_status, result)
+
+    async def complete_auth_proof(self, *_args: Any, **_kwargs: Any) -> None:
+        self.completed_count += 1
+
+    async def read_session(self, token: Any, **kwargs: Any) -> SessionCheck:
+        authenticated = self.sessions.get(token.database_value())
+        if authenticated is None or authenticated.expires_at <= kwargs["now"]:
+            return SessionCheck(status=SessionCheckStatus.INVALID)
+        return SessionCheck(SessionCheckStatus.ACTIVE, authenticated)
+
+    async def lock_session_for_login(self, token: Any, **kwargs: Any) -> SessionCheck:
+        return await self.read_session(token, **kwargs)
+
+    async def revoke_session_for_login(self, token: Any, **_kwargs: Any) -> None:
+        digest = token.database_value()
+        self.revoked_for_login.append(digest)
+        self.sessions.pop(digest, None)
+
+    async def lock_session_for_mutation(
+        self, token: Any, _csrf: Any, **kwargs: Any
+    ) -> SessionCheck:
+        return await self.read_session(token, **kwargs)
+
+    async def revoke_session(self, token: Any, _csrf: Any, **kwargs: Any) -> SessionCheck:
+        checked = await self.read_session(token, **kwargs)
+        self.sessions.pop(token.database_value(), None)
+        return checked
+
+
+def _multi_auth_app(
+    persistence: MultiOwnerAuthPersistence,
+    *,
+    tokens: list[OpaqueAuthTokens],
+) -> FastAPI:
+    token_values = iter(tokens)
+    service = TelegramAuthService(
+        bot_token=BOT_TOKEN,
+        allowed_telegram_user_ids=frozenset(persistence.owners),
+        digester=HttpSecurityDigester(SECURITY_KEY),
+        uow_factory=FakeUow(persistence),
+        clock=lambda: NOW,
+        token_factory=lambda: next(token_values),
+    )
+    return create_app(
+        readiness_probe=ReadinessStub(),
+        auth_service=service,
+        auth_origin=ORIGIN,
+    )
 
 
 def _auth_app(
@@ -338,13 +474,24 @@ async def test_auth_login_me_logout_lifecycle_and_cookie_flags() -> None:
             headers={"Origin": ORIGIN},
             json={"initData": _signed_init_data()},
         )
-        me = await client.get("/api/v1/auth/me")
+        session_binding = login.headers["X-Session-Binding"]
+        me = await client.get(
+            "/api/v1/auth/me",
+            headers={"X-Session-Binding": session_binding},
+        )
         csrf = client.cookies.get("__Host-numismat_csrf")
         logout = await client.post(
             "/api/v1/auth/logout",
-            headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+            headers={
+                "Origin": ORIGIN,
+                "X-CSRF-Token": csrf,
+                "X-Session-Binding": session_binding,
+            },
         )
-        after = await client.get("/api/v1/auth/me")
+        after = await client.get(
+            "/api/v1/auth/me",
+            headers={"X-Session-Binding": session_binding},
+        )
 
     assert login.status_code == 200
     assert login.json() == {
@@ -354,6 +501,7 @@ async def test_auth_login_me_logout_lifecycle_and_cookie_flags() -> None:
         "locale": "ru_RU",
         "timezone": "Europe/Moscow",
     }
+    assert session_binding == HttpSecurityDigester(SECURITY_KEY).session_binding(SESSION_TOKEN)
     set_cookies = login.headers.get_list("set-cookie")
     assert len(set_cookies) == 2
     assert any("__Host-numismat_session=" in value and "HttpOnly" in value for value in set_cookies)
@@ -367,39 +515,9 @@ async def test_auth_login_me_logout_lifecycle_and_cookie_flags() -> None:
     )
     assert me.status_code == 200
     assert logout.status_code == 204
-    logout_cookies = logout.headers.get_list("set-cookie")
-    assert len(logout_cookies) == 2
-    assert all("Max-Age=0" in value and "expires=" in value.lower() for value in logout_cookies)
-    assert all(
-        "Path=/" in value
-        and "Secure" in value
-        and "SameSite=strict" in value
-        and "Domain=" not in value
-        for value in logout_cookies
-    )
-    assert "HttpOnly" in next(
-        value for value in logout_cookies if "__Host-numismat_session=" in value
-    )
-    assert "HttpOnly" not in next(
-        value for value in logout_cookies if "__Host-numismat_csrf=" in value
-    )
+    assert logout.headers.get_list("set-cookie") == []
     assert after.status_code == 401
-    stale_cookies = after.headers.get_list("set-cookie")
-    assert len(stale_cookies) == 2
-    assert all("Max-Age=0" in value and "expires=" in value.lower() for value in stale_cookies)
-    assert all(
-        "Path=/" in value
-        and "Secure" in value
-        and "SameSite=strict" in value
-        and "Domain=" not in value
-        for value in stale_cookies
-    )
-    assert "HttpOnly" in next(
-        value for value in stale_cookies if "__Host-numismat_session=" in value
-    )
-    assert "HttpOnly" not in next(
-        value for value in stale_cookies if "__Host-numismat_csrf=" in value
-    )
+    assert after.headers.get_list("set-cookie") == []
     assert persistence.created_session_digest is not None
     assert SESSION_TOKEN.encode() not in persistence.created_session_digest
     assert CSRF_TOKEN.encode() not in persistence.created_csrf_digest
@@ -407,6 +525,65 @@ async def test_auth_login_me_logout_lifecycle_and_cookie_flags() -> None:
         assert response.headers["cache-control"] == "no-store, no-cache"
         assert response.headers["pragma"] == "no-cache"
         assert response.headers["referrer-policy"] == "no-referrer"
+
+
+@pytest.mark.asyncio
+async def test_protected_read_requires_binding_to_the_exact_session_cookie() -> None:
+    owner = AuthOwner(uuid7(), "ru_RU", "Europe/Moscow", "RUB")
+    app = _auth_app(FakeAuthPersistence(owner))
+    digester = HttpSecurityDigester(SECURITY_KEY)
+
+    async with _client(app) as client:
+        login = await client.post(
+            "/api/v1/auth/telegram",
+            json={"initData": _signed_init_data()},
+        )
+        binding = login.headers.get("X-Session-Binding")
+        bound = await client.get(
+            "/api/v1/auth/me",
+            headers={"X-Session-Binding": binding or ""},
+        )
+        stale = await client.get(
+            "/api/v1/auth/me",
+            headers={"X-Session-Binding": digester.session_binding(_opaque_token(99))},
+        )
+        unbound = await client.get("/api/v1/auth/me")
+
+    assert login.status_code == 200
+    assert binding == digester.session_binding(SESSION_TOKEN)
+    assert unbound.status_code == 401
+    assert unbound.json()["error"]["code"] == "auth_session_invalid"
+    assert stale.status_code == 401
+    assert stale.json()["error"]["code"] == "auth_session_invalid"
+    assert stale.headers.get_list("set-cookie") == []
+    assert bound.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_stale_logout_binding_is_rejected_before_csrf_and_preserves_cookies() -> None:
+    owner = AuthOwner(uuid7(), "ru_RU", "Europe/Moscow", "RUB")
+    persistence = FakeAuthPersistence(owner)
+    app = _auth_app(persistence)
+    stale_binding = HttpSecurityDigester(SECURITY_KEY).session_binding(_opaque_token(99))
+
+    async with _client(app) as client:
+        login = await client.post(
+            "/api/v1/auth/telegram",
+            json={"initData": _signed_init_data()},
+        )
+        response = await client.post(
+            "/api/v1/auth/logout",
+            headers={
+                "X-CSRF-Token": _opaque_token(98),
+                "X-Session-Binding": stale_binding,
+            },
+        )
+
+    assert login.status_code == 200
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "auth_session_invalid"
+    assert response.headers.get_list("set-cookie") == []
+    assert not persistence.revoked
 
 
 @pytest.mark.parametrize("origin", [None, "https://web.telegram.org"])
@@ -424,7 +601,10 @@ async def test_logout_accepts_native_webview_origin_metadata_with_valid_csrf(
             json={"initData": _signed_init_data()},
         )
         csrf = client.cookies.get("__Host-numismat_csrf")
-        headers = {"X-CSRF-Token": csrf}
+        headers = {
+            "X-CSRF-Token": csrf,
+            "X-Session-Binding": login.headers["X-Session-Binding"],
+        }
         if origin is not None:
             headers["Origin"] = origin
         logout = await client.post("/api/v1/auth/logout", headers=headers)
@@ -469,22 +649,143 @@ async def test_replay_is_rejected_without_new_cookies() -> None:
 
 
 @pytest.mark.asyncio
+async def test_signed_login_switches_an_active_session_between_allowlisted_users() -> None:
+    owner_a = AuthOwner(uuid7(), "ru_RU", "Europe/Moscow", "RUB", OWNER_ID)
+    owner_b = AuthOwner(uuid7(), "ru_RU", "Europe/Moscow", "RUB", SECOND_OWNER_ID)
+    persistence = MultiOwnerAuthPersistence({OWNER_ID: owner_a, SECOND_OWNER_ID: owner_b})
+    first_tokens = OpaqueAuthTokens(_opaque_token(11), _opaque_token(12))
+    second_tokens = OpaqueAuthTokens(_opaque_token(13), _opaque_token(14))
+
+    async with _client(
+        _multi_auth_app(persistence, tokens=[first_tokens, second_tokens])
+    ) as client:
+        first = await client.post(
+            "/api/v1/auth/telegram",
+            json={"initData": _signed_init_data(user={"id": OWNER_ID})},
+        )
+        second = await client.post(
+            "/api/v1/auth/telegram",
+            json={"initData": _signed_init_data(user={"id": SECOND_OWNER_ID})},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.headers["X-Session-Binding"] != second.headers["X-Session-Binding"]
+    assert len(second.headers.get_list("set-cookie")) == 2
+    assert persistence.claim_count == 2
+    assert persistence.completed_count == 2
+    assert len(persistence.revoked_for_login) == 1
+    assert len(persistence.sessions) == 1
+    assert next(iter(persistence.sessions.values())).owner.owner_id == owner_b.owner_id
+
+
+@pytest.mark.asyncio
+async def test_repeated_signed_proof_reuses_same_owner_session_without_cookie_rotation() -> None:
+    owner = AuthOwner(uuid7(), "ru_RU", "Europe/Moscow", "RUB", OWNER_ID)
+    persistence = MultiOwnerAuthPersistence({OWNER_ID: owner})
+    tokens = OpaqueAuthTokens(_opaque_token(21), _opaque_token(22))
+    app = _multi_auth_app(persistence, tokens=[tokens])
+    proof = _signed_init_data(user={"id": OWNER_ID})
+
+    async with _client(app) as client:
+        first = await client.post("/api/v1/auth/telegram", json={"initData": proof})
+        repeated = await client.post("/api/v1/auth/telegram", json={"initData": proof})
+
+    assert first.status_code == 200
+    assert repeated.status_code == 200
+    assert repeated.headers["X-Session-Binding"] == first.headers["X-Session-Binding"]
+    assert repeated.headers.get_list("set-cookie") == []
+    assert persistence.claim_count == 1
+    assert persistence.completed_count == 1
+    assert persistence.revoked_for_login == []
+
+
+@pytest.mark.asyncio
+async def test_foreign_signed_login_preserves_ambient_auth_cookies() -> None:
+    owner = AuthOwner(uuid7(), "ru_RU", "Europe/Moscow", "RUB", OWNER_ID)
+    persistence = MultiOwnerAuthPersistence({OWNER_ID: owner})
+    app = _multi_auth_app(
+        persistence,
+        tokens=[OpaqueAuthTokens(_opaque_token(31), _opaque_token(32))],
+    )
+
+    async with _client(app) as client:
+        response = await client.post(
+            "/api/v1/auth/telegram",
+            headers={
+                "Cookie": (
+                    f"__Host-numismat_session={_opaque_token(33)}; "
+                    f"__Host-numismat_csrf={_opaque_token(34)}"
+                )
+            },
+            json={"initData": _signed_init_data(user={"id": FOREIGN_OWNER_ID})},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "telegram_owner_forbidden"
+    assert response.headers.get_list("set-cookie") == []
+
+
+@pytest.mark.asyncio
+async def test_removed_user_session_is_rejected_for_reads_and_mutations() -> None:
+    removed_owner = AuthOwner(
+        uuid7(),
+        "ru_RU",
+        "Europe/Moscow",
+        "RUB",
+        SECOND_OWNER_ID,
+    )
+    persistence = FakeAuthPersistence(
+        removed_owner,
+        active=AuthenticatedSession(removed_owner, NOW + timedelta(hours=1)),
+    )
+    authenticator = SessionAuthenticator(
+        HttpSecurityDigester(SECURITY_KEY),
+        frozenset((OWNER_ID,)),
+    )
+    credentials = SessionCredentials(
+        SESSION_TOKEN,
+        HttpSecurityDigester(SECURITY_KEY).session_binding(SESSION_TOKEN),
+    )
+    auth_persistence = cast(AuthPersistence, persistence)
+
+    with pytest.raises(SessionInvalidError):
+        await authenticator.authenticate_read(auth_persistence, credentials, now=NOW)
+    with pytest.raises(SessionInvalidError):
+        await authenticator.authenticate_mutation(
+            auth_persistence,
+            SESSION_TOKEN,
+            credentials.session_binding,
+            CSRF_TOKEN,
+            CSRF_TOKEN,
+            now=NOW,
+        )
+
+
+@pytest.mark.asyncio
 async def test_csrf_failure_does_not_clear_or_revoke_session() -> None:
     owner = AuthOwner(uuid7(), "ru_RU", "Europe/Moscow", "RUB")
     persistence = FakeAuthPersistence(owner)
     app = _auth_app(persistence)
 
     async with _client(app) as client:
-        await client.post(
+        login = await client.post(
             "/api/v1/auth/telegram",
             headers={"Origin": ORIGIN},
             json={"initData": _signed_init_data()},
         )
         response = await client.post(
             "/api/v1/auth/logout",
-            headers={"Origin": ORIGIN, "X-CSRF-Token": SESSION_TOKEN},
+            headers={
+                "Origin": ORIGIN,
+                "X-CSRF-Token": SESSION_TOKEN,
+                "X-Session-Binding": login.headers["X-Session-Binding"],
+            },
         )
-        me = await client.get("/api/v1/auth/me")
+        me = await client.get(
+            "/api/v1/auth/me",
+            headers={"X-Session-Binding": login.headers["X-Session-Binding"]},
+        )
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "csrf_failed"
@@ -678,19 +979,23 @@ async def test_auth_boundary_rejects_ambiguous_security_headers_with_fixed_codes
             },
             content=body,
         )
-        await client.post(
+        login = await client.post(
             "/api/v1/auth/telegram",
             headers={"Origin": ORIGIN},
             json={"initData": _signed_init_data()},
         )
         missing_csrf = await client.post(
             "/api/v1/auth/logout",
-            headers={"Origin": ORIGIN},
+            headers={
+                "Origin": ORIGIN,
+                "X-Session-Binding": login.headers["X-Session-Binding"],
+            },
         )
         duplicate_csrf = await client.post(
             "/api/v1/auth/logout",
             headers=[
                 ("Origin", ORIGIN),
+                ("X-Session-Binding", login.headers["X-Session-Binding"]),
                 ("X-CSRF-Token", CSRF_TOKEN),
                 ("X-CSRF-Token", CSRF_TOKEN),
             ],
@@ -700,6 +1005,7 @@ async def test_auth_boundary_rejects_ambiguous_security_headers_with_fixed_codes
             headers=[
                 ("Cookie", f"__Host-numismat_session={SESSION_TOKEN}"),
                 ("Cookie", f"__Host-numismat_csrf={CSRF_TOKEN}"),
+                ("X-Session-Binding", login.headers["X-Session-Binding"]),
             ],
         )
         duplicate_cookie = await client.get(
@@ -707,6 +1013,14 @@ async def test_auth_boundary_rejects_ambiguous_security_headers_with_fixed_codes
             headers=[
                 ("Cookie", f"__Host-numismat_session={SESSION_TOKEN}"),
                 ("Cookie", f"__Host-numismat_session={SESSION_TOKEN}"),
+                ("X-Session-Binding", login.headers["X-Session-Binding"]),
+            ],
+        )
+        duplicate_binding = await client.get(
+            "/api/v1/auth/me",
+            headers=[
+                ("X-Session-Binding", login.headers["X-Session-Binding"]),
+                ("X-Session-Binding", login.headers["X-Session-Binding"]),
             ],
         )
 
@@ -722,8 +1036,10 @@ async def test_auth_boundary_rejects_ambiguous_security_headers_with_fixed_codes
     assert duplicate_csrf.status_code == 403
     assert duplicate_csrf.json()["error"]["code"] == "csrf_failed"
     assert duplicate_csrf.headers.get_list("set-cookie") == []
-    assert duplicate_cookie.status_code == 422
+    assert duplicate_cookie.status_code == 401
     assert split_cookies.status_code == 200
+    assert duplicate_binding.status_code == 401
+    assert duplicate_binding.headers.get_list("set-cookie") == []
 
 
 @pytest.mark.asyncio
@@ -740,12 +1056,15 @@ async def test_expired_session_is_rejected_and_stale_cookies_are_cleared() -> No
             json={"initData": _signed_init_data()},
         )
         current[0] = NOW + timedelta(hours=1)
-        expired = await client.get("/api/v1/auth/me")
+        expired = await client.get(
+            "/api/v1/auth/me",
+            headers={"X-Session-Binding": login.headers["X-Session-Binding"]},
+        )
 
     assert login.status_code == 200
     assert expired.status_code == 401
     assert expired.json()["error"]["code"] == "auth_session_invalid"
-    assert len(expired.headers.get_list("set-cookie")) == 2
+    assert expired.headers.get_list("set-cookie") == []
 
 
 @pytest.mark.asyncio
@@ -819,16 +1138,34 @@ async def test_auth_openapi_retains_manual_body_schema() -> None:
     }
     me_operation = schema["paths"]["/api/v1/auth/me"]["get"]
     logout_operation = schema["paths"]["/api/v1/auth/logout"]["post"]
+    binding_parameter = {
+        "description": (
+            "Opaque binding to the exact host-only session cookie for this page context."
+        ),
+        "in": "header",
+        "name": "X-Session-Binding",
+        "required": True,
+        "schema": {
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$",
+            "type": "string",
+        },
+    }
     assert me_operation["security"] == [{"SessionCookie": []}]
+    assert me_operation["parameters"] == [binding_parameter]
     assert logout_operation["security"] == [{"SessionCookie": []}]
     assert logout_operation["parameters"] == [
+        binding_parameter,
         {
             "in": "header",
             "name": "X-CSRF-Token",
             "required": True,
             "schema": {"maxLength": 43, "minLength": 43, "type": "string"},
-        }
+        },
     ]
+    telegram_success = schema["paths"]["/api/v1/auth/telegram"]["post"]["responses"]["200"]
+    assert telegram_success["headers"]["X-Session-Binding"]["schema"] == binding_parameter["schema"]
     for path, method, statuses in (
         ("/api/v1/auth/telegram", "post", (401, 403, 409, 413, 415, 422)),
         ("/api/v1/auth/me", "get", (401, 422)),

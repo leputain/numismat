@@ -12,12 +12,12 @@ from finbot.adapters.telegram.controllers.main_menu import (
     TelegramMainMenuContext,
 )
 from finbot.adapters.telegram.executor import TelegramMutationRequest
+from finbot.adapters.telegram.principal import telegram_principal_for_message
 from finbot.application.errors import ApplicationError
 
 
 @dataclass(frozen=True, slots=True)
 class MainMenuRequestDefaults:
-    owner_telegram_user_id: int = field(repr=False)
     locale: str = field(repr=False)
     timezone: str = field(repr=False)
     currency: str = field(repr=False)
@@ -27,10 +27,11 @@ class MainMenuRequestDefaults:
         update_id: int | None,
         message: Message,
     ) -> TelegramMutationRequest:
+        principal = telegram_principal_for_message(message)
         return TelegramMutationRequest(
             update_id=update_id,
-            owner_telegram_user_id=self.owner_telegram_user_id,
-            chat_id=message.chat.id,
+            owner_telegram_user_id=principal.telegram_user_id,
+            chat_id=principal.chat_id,
             locale=self.locale,
             timezone=self.timezone,
             currency=self.currency,
@@ -45,8 +46,8 @@ class MainMenuReceiptDelivery(Protocol):
     ) -> None: ...
 
 
-class MiniAppOwnerMenu(Protocol):
-    async def ensure_owner_menu(self, bot: Bot, *, chat_id: int) -> None: ...
+class MiniAppUserMenu(Protocol):
+    async def ensure_user_menu(self, bot: Bot, *, chat_id: int) -> None: ...
 
 
 class MainMenuRouter:
@@ -59,7 +60,7 @@ class MainMenuRouter:
         controller: MainMenuController,
         direct_delivery: MainMenuReceiptDelivery,
         defaults: MainMenuRequestDefaults,
-        miniapp_menu: MiniAppOwnerMenu | None = None,
+        miniapp_menu: MiniAppUserMenu | None = None,
     ) -> None:
         self._controller = controller
         self._direct_delivery = direct_delivery
@@ -85,7 +86,7 @@ class MainMenuRouter:
         message: Message,
         update_id: int | None,
         action: MainMenuAction,
-    ) -> None:
+    ) -> bool:
         try:
             receipt = await self._controller.open(
                 TelegramMainMenuContext(self._defaults.request(update_id, message)),
@@ -93,25 +94,27 @@ class MainMenuRouter:
             )
         except ApplicationError as exc:
             await message.answer(str(exc))
-            return
+            return False
         if receipt is not None and update_id is None:
             await self._direct_delivery.deliver(message, receipt)
+        return True
 
     async def start(self, message: Message, finbot_update_id: int | None = None) -> None:
-        await self._ensure_owner_menu(message)
-        await self._open(message, finbot_update_id, MainMenuAction.START)
+        if await self._open(message, finbot_update_id, MainMenuAction.START):
+            await self._ensure_user_menu(message)
 
     async def menu(self, message: Message, finbot_update_id: int | None = None) -> None:
-        await self._ensure_owner_menu(message)
-        await self._open(message, finbot_update_id, MainMenuAction.MENU)
+        if await self._open(message, finbot_update_id, MainMenuAction.MENU):
+            await self._ensure_user_menu(message)
 
-    async def _ensure_owner_menu(self, message: Message) -> None:
+    async def _ensure_user_menu(self, message: Message) -> None:
         if self._miniapp_menu is None:
             return
         bot = message.bot
         if bot is None:  # pragma: no cover - aiogram dispatch always binds the bot
             raise RuntimeError("Telegram bot is not bound to the message")
-        await self._miniapp_menu.ensure_owner_menu(bot, chat_id=message.chat.id)
+        principal = telegram_principal_for_message(message)
+        await self._miniapp_menu.ensure_user_menu(bot, chat_id=principal.chat_id)
 
     async def help_menu(self, message: Message, finbot_update_id: int | None = None) -> None:
         await self._open(message, finbot_update_id, MainMenuAction.HELP)

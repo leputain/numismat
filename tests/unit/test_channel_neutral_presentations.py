@@ -231,9 +231,15 @@ async def test_delivery_binds_snapshot_without_mutating_draft_payload(
     )
     session = cast(AsyncSession, _SessionWithBegin())
     lock = AsyncMock(return_value=[response])
+    ownership = AsyncMock(return_value=True)
     deliver = AsyncMock(return_value=44)
     bind = AsyncMock(return_value=True)
     monkeypatch.setattr(telegram_outbox, "lock_pending_responses", lock)
+    monkeypatch.setattr(
+        telegram_outbox,
+        "response_draft_belongs_to_private_chat",
+        ownership,
+    )
     monkeypatch.setattr(telegram_outbox, "deliver_response", deliver)
     monkeypatch.setattr(telegram_outbox, "bind_telegram_draft_presentation", bind)
 
@@ -249,6 +255,7 @@ async def test_delivery_binds_snapshot_without_mutating_draft_payload(
     )
 
     assert delivered == 1
+    ownership.assert_awaited_once_with(session, response)
     bind.assert_awaited_once_with(
         session,
         draft_id=draft_id,
@@ -263,3 +270,96 @@ async def test_delivery_binds_snapshot_without_mutating_draft_payload(
     delivery_source = getsource(telegram_outbox.deliver_pending_responses)
     assert "payload" not in delivery_source
     assert "presentation_ref" not in delivery_source
+
+
+@pytest.mark.asyncio
+async def test_delivery_rejects_a_cross_tenant_draft_before_telegram_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = TelegramResponseOutbox(
+        update_id=1,
+        sequence=0,
+        owner_telegram_user_id=2,
+        chat_id=2,
+        method="send_message",
+        message_id=None,
+        body="Fixed receipt",
+        parse_mode=None,
+        reply_markup=None,
+        draft_id=uuid7(),
+        draft_revision=1,
+        history_page=None,
+        pending_history_page=None,
+    )
+    session = cast(AsyncSession, _SessionWithBegin())
+    deliver = AsyncMock(return_value=44)
+    monkeypatch.setattr(
+        telegram_outbox,
+        "lock_pending_responses",
+        AsyncMock(return_value=[response]),
+    )
+    monkeypatch.setattr(
+        telegram_outbox,
+        "response_draft_belongs_to_private_chat",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(telegram_outbox, "deliver_response", deliver)
+
+    def sessions() -> _SessionContext:
+        return _SessionContext(session)
+
+    with pytest.raises(RuntimeError, match="ownership mismatch"):
+        await telegram_outbox.deliver_pending_responses(
+            cast(async_sessionmaker[AsyncSession], sessions),
+            cast(Bot, object()),
+            update_id=1,
+            owner_telegram_user_id=2,
+            chat_id=2,
+        )
+
+    deliver.assert_not_awaited()
+    assert response.sent_at is None
+
+
+@pytest.mark.asyncio
+async def test_delivery_rejects_a_deleted_draft_snapshot_before_telegram_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = TelegramResponseOutbox(
+        update_id=1,
+        sequence=0,
+        owner_telegram_user_id=2,
+        chat_id=2,
+        method="send_message",
+        message_id=None,
+        body="Fixed receipt",
+        parse_mode=None,
+        reply_markup=None,
+        draft_id=None,
+        draft_revision=1,
+        history_page=None,
+        pending_history_page=None,
+    )
+    session = cast(AsyncSession, _SessionWithBegin())
+    deliver = AsyncMock(return_value=44)
+    monkeypatch.setattr(
+        telegram_outbox,
+        "lock_pending_responses",
+        AsyncMock(return_value=[response]),
+    )
+    monkeypatch.setattr(telegram_outbox, "deliver_response", deliver)
+
+    def sessions() -> _SessionContext:
+        return _SessionContext(session)
+
+    with pytest.raises(RuntimeError, match="ownership mismatch"):
+        await telegram_outbox.deliver_pending_responses(
+            cast(async_sessionmaker[AsyncSession], sessions),
+            cast(Bot, object()),
+            update_id=1,
+            owner_telegram_user_id=2,
+            chat_id=2,
+        )
+
+    deliver.assert_not_awaited()
+    assert response.sent_at is None

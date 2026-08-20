@@ -29,6 +29,7 @@ from finbot.adapters.http.auth.ports import (
     SessionCheck,
     SessionCheckStatus,
 )
+from finbot.adapters.http.auth.service import SessionCredentials
 from finbot.adapters.http.catalogs.ports import CatalogQueryUnitOfWorkFactory
 from finbot.adapters.http.catalogs.service import HttpCatalogService
 from finbot.adapters.http.mutations.ports import (
@@ -69,14 +70,17 @@ ACCOUNT_ID = UUID("018f0000-0000-7000-8000-000000000002")
 CATEGORY_ID = UUID("018f0000-0000-7000-8000-000000000003")
 SECURITY_KEY = base64.urlsafe_b64encode(b"k" * 32).rstrip(b"=").decode("ascii")
 SESSION_TOKEN = base64.urlsafe_b64encode(b"s" * 32).rstrip(b"=").decode("ascii")
+SESSION_BINDING = HttpSecurityDigester(SECURITY_KEY).session_binding(SESSION_TOKEN)
 CSRF_TOKEN = base64.urlsafe_b64encode(b"c" * 32).rstrip(b"=").decode("ascii")
 IDEMPOTENCY_KEY = base64.urlsafe_b64encode(b"i" * 32).rstrip(b"=").decode("ascii")
 CREDENTIALS = MutationCredentials(
     session_token=SESSION_TOKEN,
+    session_binding=SESSION_BINDING,
     csrf_cookie=CSRF_TOKEN,
     csrf_header=CSRF_TOKEN,
     idempotency_key=IDEMPOTENCY_KEY,
 )
+READ_CREDENTIALS = SessionCredentials(SESSION_TOKEN, SESSION_BINDING)
 
 
 class RecordingCatalogCommands:
@@ -356,9 +360,9 @@ async def test_catalog_reads_authenticate_and_project_inside_one_query_uow() -> 
         clock=lambda: NOW,
     )
 
-    accounts = await service.accounts(SESSION_TOKEN, archived=True)
+    accounts = await service.accounts(READ_CREDENTIALS, archived=True)
     categories = await service.categories(
-        SESSION_TOKEN,
+        READ_CREDENTIALS,
         kind=TransactionType.INCOME,
         archived=False,
     )

@@ -23,11 +23,13 @@ from finbot.bootstrap import build_dispatcher
 @dataclass(slots=True)
 class _Chat:
     id: int
+    type: str = "private"
 
 
 class _Message:
     def __init__(self) -> None:
         self.chat = _Chat(93_000_003)
+        self.from_user = _Chat(93_000_003)
         self.answers: list[str] = []
 
     async def answer(self, text: str, **kwargs: object) -> None:
@@ -79,7 +81,7 @@ def _router(
     router = MainMenuRouter(
         cast(MainMenuController, controller),
         cast(MainMenuReceiptDelivery, delivery),
-        MainMenuRequestDefaults(92_000_002, "ru", "UTC", "RUB"),
+        MainMenuRequestDefaults("ru", "UTC", "RUB"),
     )
     return router, controller, delivery
 
@@ -109,6 +111,8 @@ async def test_tracked_handler_leaves_delivery_to_durable_outbox_middleware() ->
 
     request = controller.calls[0][0].request
     assert request.update_id == 91_000_001
+    assert request.owner_telegram_user_id == 93_000_003
+    assert request.chat_id == 93_000_003
     assert delivery.receipts == []
     assert events == ["controller.commit"]
 
@@ -160,7 +164,7 @@ def test_bootstrap_registers_focused_menu_router_before_the_text_catch_all() -> 
 
 
 def test_request_defaults_and_context_hide_private_identifiers_from_repr() -> None:
-    defaults = MainMenuRequestDefaults(92_000_002, "private-locale", "UTC", "RUB")
+    defaults = MainMenuRequestDefaults("private-locale", "UTC", "RUB")
     context = TelegramMainMenuContext(defaults.request(None, cast(Message, _Message())))
 
     rendered = f"{defaults!r} {context!r}"

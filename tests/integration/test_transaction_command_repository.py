@@ -1,6 +1,6 @@
 import asyncio
 import os
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 from uuid import UUID, uuid4
 
 import pytest
@@ -20,6 +20,8 @@ from finbot.adapters.database.models import (
     CategoryRule,
     Draft,
     ProcessedUpdate,
+    RecurringInstance,
+    RecurringSchedule,
     TelegramResponseOutbox,
     Transaction,
     User,
@@ -73,6 +75,12 @@ async def _cleanup_owner(engine: AsyncEngine, owner_id: UUID) -> None:
     async with engine.begin() as connection:
         await connection.execute(delete(AuditEvent).where(AuditEvent.user_id == owner_id))
         await connection.execute(delete(Transaction).where(Transaction.user_id == owner_id))
+        await connection.execute(
+            delete(RecurringInstance).where(RecurringInstance.user_id == owner_id)
+        )
+        await connection.execute(
+            delete(RecurringSchedule).where(RecurringSchedule.user_id == owner_id)
+        )
         await connection.execute(delete(Draft).where(Draft.user_id == owner_id))
         await connection.execute(delete(CategoryRule).where(CategoryRule.user_id == owner_id))
         await connection.execute(
@@ -229,6 +237,112 @@ async def test_confirm_is_review_only_atomic_and_uses_external_transaction_bound
                 == 1
             )
             assert await verification.scalar(select(Draft).where(Draft.user_id == owner_id)) is None
+    finally:
+        await _cleanup_owner(engine, owner_id)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_confirm_recurring_draft_detaches_instance_before_draft_delete() -> None:
+    engine = create_async_engine(DATABASE_URL)
+    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
+    (
+        owner_id,
+        _primary_id,
+        target_id,
+        target_category_id,
+        _transaction_id,
+        draft_ref,
+    ) = await _setup_owner(factory)
+    assert draft_ref is not None
+    occurred_at = datetime(2026, 8, 13, 12, tzinfo=UTC)
+
+    try:
+        async with factory.begin() as setup:
+            draft = await setup.scalar(
+                select(Draft).where(
+                    Draft.id == draft_ref.draft_id,
+                    Draft.user_id == owner_id,
+                )
+            )
+            assert draft is not None
+            draft.state = "review"
+            schedule = RecurringSchedule(
+                user_id=owner_id,
+                name="Подписка",
+                type="expense",
+                amount_minor=1000,
+                currency="RUB",
+                account_id=target_id,
+                category_id=target_category_id,
+                cadence="monthly",
+                interval=1,
+                anchor_date=date(2026, 8, 13),
+                local_time=time(12),
+                timezone="UTC",
+                next_occurrence_index=1,
+            )
+            setup.add(schedule)
+            await setup.flush()
+            recurring_instance = RecurringInstance(
+                schedule_id=schedule.id,
+                user_id=owner_id,
+                occurrence_index=0,
+                nominal_local=datetime(2026, 8, 13, 12),
+                scheduled_for=occurred_at,
+                timezone="UTC",
+                type="expense",
+                amount_minor=1000,
+                currency="RUB",
+                account_id=target_id,
+                category_id=target_category_id,
+                status="generated",
+                next_attempt_at=occurred_at,
+                attempt_count=1,
+                draft_id=draft_ref.draft_id,
+                generated_at=occurred_at,
+                version=4,
+            )
+            setup.add(recurring_instance)
+            await setup.flush()
+            instance_id = recurring_instance.id
+
+        async with factory.begin() as session:
+            result = await SqlAlchemyTransactionCommandRepository(session).confirm_reviewed_draft(
+                ConfirmTransactionDraftCommand(owner_id=owner_id, expected=draft_ref)
+            )
+            assert result.resulting_state == "confirmed"
+
+        async with factory() as verification:
+            stored_instance = await verification.scalar(
+                select(RecurringInstance).where(
+                    RecurringInstance.id == instance_id,
+                    RecurringInstance.user_id == owner_id,
+                )
+            )
+            assert stored_instance is not None
+            assert stored_instance.status == "generated"
+            assert stored_instance.draft_id is None
+            assert stored_instance.version == 5
+            assert (
+                await verification.scalar(
+                    select(func.count(Transaction.id)).where(
+                        Transaction.user_id == owner_id,
+                        Transaction.source == "recurring",
+                        Transaction.recurring_instance_id == instance_id,
+                    )
+                )
+                == 1
+            )
+            assert (
+                await verification.scalar(
+                    select(Draft).where(
+                        Draft.id == draft_ref.draft_id,
+                        Draft.user_id == owner_id,
+                    )
+                )
+                is None
+            )
     finally:
         await _cleanup_owner(engine, owner_id)
         await engine.dispose()

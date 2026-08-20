@@ -47,7 +47,6 @@ export function createAuthApi(client: SameOriginApiClient): AuthApi {
   return {
     async getSession(options = {}): Promise<AuthSession> {
       const payload = await client.get<GeneratedAuthSession>("/api/v1/auth/me", {
-        protected: false,
         ...(options.retry === undefined ? {} : { retry: options.retry }),
       });
       return parseSession(payload);

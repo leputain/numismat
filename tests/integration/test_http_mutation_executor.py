@@ -44,7 +44,11 @@ from finbot.adapters.database.repositories.web_sessions import (
 from finbot.adapters.http.app import create_app
 from finbot.adapters.http.auth.cookies import CSRF_COOKIE, SESSION_COOKIE
 from finbot.adapters.http.auth.crypto import HttpSecurityDigester
-from finbot.adapters.http.auth.service import SessionInvalidError, TelegramAuthService
+from finbot.adapters.http.auth.service import (
+    SessionCredentials,
+    SessionInvalidError,
+    TelegramAuthService,
+)
 from finbot.adapters.http.mutations.ports import MutationUnitOfWork
 from finbot.adapters.http.mutations.service import (
     HttpMutationExecutor,
@@ -84,6 +88,7 @@ class _AuthTokens:
     def credentials(self, idempotency_key: str) -> MutationCredentials:
         return MutationCredentials(
             self.session_token,
+            HttpSecurityDigester(SECURITY_KEY).session_binding(self.session_token),
             self.csrf_token,
             self.csrf_token,
             idempotency_key,
@@ -236,7 +241,12 @@ def _cookie_header(tokens: _AuthTokens) -> str:
 
 
 def _read_headers(tokens: _AuthTokens) -> dict[str, str]:
-    return {"Cookie": _cookie_header(tokens)}
+    return {
+        "Cookie": _cookie_header(tokens),
+        "X-Session-Binding": HttpSecurityDigester(SECURITY_KEY).session_binding(
+            tokens.session_token
+        ),
+    }
 
 
 def _mutation_headers(
@@ -248,6 +258,9 @@ def _mutation_headers(
         "Idempotency-Key": idempotency_key,
         "Origin": ORIGIN,
         "X-CSRF-Token": tokens.csrf_token,
+        "X-Session-Binding": HttpSecurityDigester(SECURITY_KEY).session_binding(
+            tokens.session_token
+        ),
     }
 
 
@@ -547,7 +560,12 @@ async def test_logout_waits_for_task14_mutation_transaction_then_revokes_session
             digester=digester,
             uow_factory=SqlAlchemyAuthUnitOfWorkFactory(factory),
             clock=lambda: NOW,
-        ).logout(tokens.session_token, tokens.csrf_token, tokens.csrf_token)
+        ).logout(
+            tokens.session_token,
+            digester.session_binding(tokens.session_token),
+            tokens.csrf_token,
+            tokens.csrf_token,
+        )
 
     mutation_task = asyncio.create_task(
         executor.execute(
@@ -744,7 +762,13 @@ async def test_foreign_and_missing_entities_are_indistinguishable_and_unmodified
         read_errors: list[tuple[object, ...]] = []
         for draft_id in (foreign.draft_ref.draft_id, uuid7()):
             with pytest.raises(EntityNotFoundError) as caught:
-                await service.draft(tokens.session_token, draft_id)
+                await service.draft(
+                    SessionCredentials(
+                        tokens.session_token,
+                        digester.session_binding(tokens.session_token),
+                    ),
+                    draft_id,
+                )
             read_errors.append(caught.value.args)
         assert read_errors[0] == read_errors[1]
 

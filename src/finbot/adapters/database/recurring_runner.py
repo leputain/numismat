@@ -6,8 +6,9 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID, uuid7
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.sql import Select
 
 from finbot.adapters.database.models import (
     Account,
@@ -208,6 +209,49 @@ async def _materialize_one(
     return True
 
 
+def _fair_due_schedule_query(now: datetime) -> Select[tuple[UUID]]:
+    ranked_due = (
+        select(
+            RecurringSchedule.id.label("schedule_id"),
+            RecurringSchedule.next_due_at.label("next_due_at"),
+            func.row_number()
+            .over(
+                partition_by=RecurringSchedule.user_id,
+                order_by=(RecurringSchedule.next_due_at, RecurringSchedule.id),
+            )
+            .label("owner_rank"),
+        )
+        .where(
+            RecurringSchedule.deleted_at.is_(None),
+            RecurringSchedule.paused_at.is_(None),
+            RecurringSchedule.next_due_at.is_not(None),
+            RecurringSchedule.next_due_at <= now,
+        )
+        .subquery("ranked_due_schedules")
+    )
+    return cast(
+        Select[tuple[UUID]],
+        select(ranked_due.c.schedule_id)
+        .where(ranked_due.c.owner_rank == 1)
+        .order_by(ranked_due.c.next_due_at, ranked_due.c.schedule_id)
+        .limit(MAX_DUE_SCHEDULES_PER_TICK),
+    )
+
+
+def _fair_stage_owner_query(now: datetime) -> Select[tuple[UUID]]:
+    oldest_actionable = func.min(RecurringInstance.next_attempt_at).label("oldest_actionable")
+    return (
+        select(RecurringInstance.user_id)
+        .where(
+            RecurringInstance.status == RecurringInstanceStatus.PENDING.value,
+            RecurringInstance.next_attempt_at <= now,
+        )
+        .group_by(RecurringInstance.user_id)
+        .order_by(oldest_actionable, RecurringInstance.user_id)
+        .limit(MAX_STAGE_OWNERS_PER_TICK)
+    )
+
+
 def _backoff(attempt_count: int) -> timedelta:
     exponent = min(max(attempt_count - 1, 0), 7)
     delay = _BASE_BACKOFF * (2**exponent)
@@ -358,6 +402,53 @@ async def _stage_one(
     return _StageResult(staged=1)
 
 
+async def _materialize_schedules_isolated(
+    session: AsyncSession,
+    schedule_ids: tuple[UUID, ...],
+    now: datetime,
+) -> tuple[int, int]:
+    materialized = failures = 0
+    for schedule_id in schedule_ids:
+        try:
+            async with session.begin_nested():
+                result = await _materialize_one(session, schedule_id, now)
+        except Exception:
+            # A corrupt or contended tenant must not roll back work already
+            # completed for other owners in this bounded phase.
+            failures += 1
+            continue
+        materialized += int(result)
+    return materialized, failures
+
+
+async def _stage_owners_isolated(
+    session: AsyncSession,
+    owner_ids: tuple[UUID, ...],
+    now: datetime,
+) -> tuple[_StageResult, int]:
+    staged = deferred = blocked = failures = 0
+    for owner_id in owner_ids:
+        try:
+            async with session.begin_nested():
+                result = await _stage_one(session, owner_id, now)
+        except Exception:
+            # Roll back only this owner's savepoint and keep the phase fair for
+            # every remaining selected tenant.
+            failures += 1
+            continue
+        staged += result.staged
+        deferred += result.deferred
+        blocked += result.blocked
+    return _StageResult(staged=staged, deferred=deferred, blocked=blocked), failures
+
+
+def _log_phase_completion(event: str, failures: int) -> None:
+    if failures:
+        _LOGGER.error(event, extra={"result": "error"})
+    else:
+        _LOGGER.info(event, extra={"result": "success"})
+
+
 class SqlAlchemyRecurringRunner:
     """Two committed, transaction-advisory-locked phases with bounded work."""
 
@@ -376,26 +467,13 @@ class SqlAlchemyRecurringRunner:
                     extra={"result": "ignored"},
                 )
                 return 0
-            schedule_ids = tuple(
-                await session.scalars(
-                    select(RecurringSchedule.id)
-                    .where(
-                        RecurringSchedule.deleted_at.is_(None),
-                        RecurringSchedule.paused_at.is_(None),
-                        RecurringSchedule.next_due_at.is_not(None),
-                        RecurringSchedule.next_due_at <= now,
-                    )
-                    .order_by(RecurringSchedule.next_due_at, RecurringSchedule.id)
-                    .limit(MAX_DUE_SCHEDULES_PER_TICK)
-                )
+            schedule_ids = tuple(await session.scalars(_fair_due_schedule_query(now)))
+            materialized, failures = await _materialize_schedules_isolated(
+                session,
+                schedule_ids,
+                now,
             )
-            materialized = 0
-            for schedule_id in schedule_ids:
-                materialized += int(await _materialize_one(session, schedule_id, now))
-        _LOGGER.info(
-            "recurring_materialization_completed",
-            extra={"result": "success"},
-        )
+        _log_phase_completion("recurring_materialization_completed", failures)
         return materialized
 
     async def _stage_pending(self, now: datetime) -> _StageResult:
@@ -405,26 +483,10 @@ class SqlAlchemyRecurringRunner:
             if not await _try_phase_lock(session, _STAGE_LOCK_KEY):
                 _LOGGER.info("recurring_staging_completed", extra={"result": "ignored"})
                 return _StageResult()
-            owner_ids = tuple(
-                await session.scalars(
-                    select(RecurringInstance.user_id)
-                    .where(
-                        RecurringInstance.status == RecurringInstanceStatus.PENDING.value,
-                        RecurringInstance.next_attempt_at <= now,
-                    )
-                    .group_by(RecurringInstance.user_id)
-                    .order_by(RecurringInstance.user_id)
-                    .limit(MAX_STAGE_OWNERS_PER_TICK)
-                )
-            )
-            staged = deferred = blocked = 0
-            for owner_id in owner_ids:
-                result = await _stage_one(session, owner_id, now)
-                staged += result.staged
-                deferred += result.deferred
-                blocked += result.blocked
-        _LOGGER.info("recurring_staging_completed", extra={"result": "success"})
-        return _StageResult(staged=staged, deferred=deferred, blocked=blocked)
+            owner_ids = tuple(await session.scalars(_fair_stage_owner_query(now)))
+            result, failures = await _stage_owners_isolated(session, owner_ids, now)
+        _log_phase_completion("recurring_staging_completed", failures)
+        return result
 
     async def tick(self, *, now: datetime | None = None) -> RecurringTickResult:
         current = _now(now or datetime.now(UTC))

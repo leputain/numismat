@@ -22,7 +22,12 @@ from finbot.adapters.database.repositories.http_mutation_commands import (
     SqlAlchemyRevisionMutationCommands,
 )
 from finbot.adapters.http.app import create_app
-from finbot.adapters.http.auth.service import CsrfRejectedError, SessionInvalidError
+from finbot.adapters.http.auth.service import (
+    CsrfRejectedError,
+    SessionBindingMismatchError,
+    SessionCredentials,
+    SessionInvalidError,
+)
 from finbot.adapters.http.mutations.service import (
     HttpRevisionMutationService,
     IdempotencyInProgressError,
@@ -59,6 +64,7 @@ from finbot.observability.logging import JsonFormatter
 ORIGIN = "https://miniapp.example.test"
 NOW = datetime(2026, 8, 14, 7, 0, tzinfo=UTC)
 SESSION_TOKEN = base64.urlsafe_b64encode(b"s" * 32).rstrip(b"=").decode("ascii")
+SESSION_BINDING = base64.urlsafe_b64encode(b"b" * 32).rstrip(b"=").decode("ascii")
 CSRF_TOKEN = base64.urlsafe_b64encode(b"c" * 32).rstrip(b"=").decode("ascii")
 IDEMPOTENCY_KEY = base64.urlsafe_b64encode(b"i" * 32).rstrip(b"=").decode("ascii")
 OWNER_ID = UUID("018f0000-0000-7000-8000-000000000001")
@@ -117,12 +123,12 @@ class FakeMutationService:
             self.error = None
             raise error
 
-    async def active_draft(self, raw_session: str) -> DraftSnapshot | None:
-        self.calls.append(("active", raw_session))
+    async def active_draft(self, credentials: SessionCredentials) -> DraftSnapshot | None:
+        self.calls.append(("active", credentials))
         self._raise_once()
         return self.current
 
-    async def draft(self, raw_session: str, draft_id: UUID) -> DraftSnapshot:
+    async def draft(self, _credentials: SessionCredentials, draft_id: UUID) -> DraftSnapshot:
         self.calls.append(("get", draft_id))
         self._raise_once()
         return self.current
@@ -253,6 +259,7 @@ def _headers() -> dict[str, str]:
         "Idempotency-Key": IDEMPOTENCY_KEY,
         "Origin": ORIGIN,
         "X-CSRF-Token": CSRF_TOKEN,
+        "X-Session-Binding": SESSION_BINDING,
     }
 
 
@@ -287,11 +294,17 @@ async def test_all_mutation_routes_return_only_minimal_receipts() -> None:
     async with _client(app) as client:
         active = await client.get(
             "/api/v1/drafts/active",
-            headers={"Cookie": headers["Cookie"]},
+            headers={
+                "Cookie": headers["Cookie"],
+                "X-Session-Binding": headers["X-Session-Binding"],
+            },
         )
         detail = await client.get(
             f"/api/v1/drafts/{DRAFT_ID}",
-            headers={"Cookie": headers["Cookie"]},
+            headers={
+                "Cookie": headers["Cookie"],
+                "X-Session-Binding": headers["X-Session-Binding"],
+            },
         )
         created = await client.post("/api/v1/drafts", headers=headers, json={})
         confirmed = await client.post(
@@ -602,6 +615,11 @@ async def test_mutation_boundary_rejects_duplicate_security_and_entity_headers()
             headers=duplicated("Idempotency-Key", IDEMPOTENCY_KEY),
             content="{}",
         )
+        duplicate_binding = await client.post(
+            "/api/v1/drafts",
+            headers=duplicated("X-Session-Binding", SESSION_BINDING),
+            content="{}",
+        )
         duplicate_type = await client.post(
             "/api/v1/drafts",
             headers=duplicated("Content-Type", "application/json"),
@@ -643,7 +661,8 @@ async def test_mutation_boundary_rejects_duplicate_security_and_entity_headers()
     assert duplicate_key.status_code == 422
     assert duplicate_type.status_code == 422
     assert duplicate_length.status_code == 422
-    assert duplicate_cookie_name.status_code == 422
+    assert duplicate_cookie_name.status_code == 401
+    assert duplicate_binding.status_code == 401
     assert split_cookie.status_code == 201
     assert [name for name, _value in service.calls] == ["create"]
 
@@ -666,6 +685,7 @@ async def _invoke_streamed_create(
         (b"idempotency-key", IDEMPOTENCY_KEY.encode("ascii")),
         (b"origin", ORIGIN.encode("ascii")),
         (b"x-csrf-token", CSRF_TOKEN.encode("ascii")),
+        (b"x-session-binding", SESSION_BINDING.encode("ascii")),
         (b"content-type", b"application/json"),
     ]
     if declared_length is not None:
@@ -715,21 +735,21 @@ async def test_streaming_limit_rejects_missing_and_lying_small_content_length() 
 
 
 @pytest.mark.parametrize(
-    ("error", "status", "code", "clears_cookies"),
+    ("error", "status", "code"),
     [
-        (IdempotencyKeyReuseError(), 409, "idempotency_key_conflict", False),
-        (IdempotencyInProgressError(), 409, "idempotency_in_progress", False),
-        (CsrfRejectedError(), 403, "csrf_failed", False),
-        (SessionInvalidError(), 401, "auth_session_invalid", True),
-        (InvalidStoredMutationResultError(), 500, "internal_error", False),
+        (IdempotencyKeyReuseError(), 409, "idempotency_key_conflict"),
+        (IdempotencyInProgressError(), 409, "idempotency_in_progress"),
+        (CsrfRejectedError(), 403, "csrf_failed"),
+        (SessionBindingMismatchError(), 401, "auth_session_invalid"),
+        (SessionInvalidError(), 401, "auth_session_invalid"),
+        (InvalidStoredMutationResultError(), 500, "internal_error"),
     ],
 )
 @pytest.mark.asyncio
-async def test_mutation_errors_are_fixed_and_only_invalid_session_clears_cookies(
+async def test_mutation_errors_are_fixed_and_preserve_ambient_cookies(
     error: Exception,
     status: int,
     code: str,
-    clears_cookies: bool,
 ) -> None:
     service = FakeMutationService()
     service.error = error
@@ -739,8 +759,7 @@ async def test_mutation_errors_are_fixed_and_only_invalid_session_clears_cookies
 
     assert response.status_code == status
     assert response.json()["error"]["code"] == code
-    cookies = response.headers.get_list("set-cookie")
-    assert (len(cookies) == 2) is clears_cookies
+    assert response.headers.get_list("set-cookie") == []
 
 
 def test_draft_projection_never_exposes_raw_or_pending_contents() -> None:
@@ -894,7 +913,12 @@ async def test_mutation_openapi_is_closed_authenticated_and_has_no_dangling_refs
             assert operation["security"] == [{"SessionCookie": []}]
             header_parameters = [item for item in operation["parameters"] if item["in"] == "header"]
             headers = {item["name"] for item in header_parameters}
-            assert headers == {"Origin", "X-CSRF-Token", "Idempotency-Key"}
+            assert headers == {
+                "Origin",
+                "X-CSRF-Token",
+                "X-Session-Binding",
+                "Idempotency-Key",
+            }
             for item in header_parameters:
                 if item["name"] == "Origin":
                     assert item["required"] is False

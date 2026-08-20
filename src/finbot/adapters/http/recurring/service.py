@@ -7,7 +7,7 @@ from uuid import UUID
 
 from finbot.adapters.database.repositories.http_idempotency import IdempotencyResultKind
 from finbot.adapters.http.auth.crypto import HttpSecurityDigester
-from finbot.adapters.http.auth.service import SessionAuthenticator
+from finbot.adapters.http.auth.service import SessionAuthenticator, SessionCredentials
 from finbot.adapters.http.mutations.ports import MutationUnitOfWork
 from finbot.adapters.http.mutations.service import (
     HttpMutationExecutor,
@@ -139,9 +139,10 @@ class HttpRecurringService:
         cursor_codec: RecurringCursorCodec,
         query_uow_factory: RecurringQueryUnitOfWorkFactory,
         mutation_executor: HttpMutationExecutor,
+        allowed_telegram_user_ids: frozenset[int] | None = None,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
-        self._authenticator = SessionAuthenticator(digester)
+        self._authenticator = SessionAuthenticator(digester, allowed_telegram_user_ids)
         self._cursor_codec = cursor_codec
         self._query_uow_factory = query_uow_factory
         self._mutation_executor = mutation_executor
@@ -155,7 +156,7 @@ class HttpRecurringService:
 
     async def list_schedules(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         *,
         deleted: bool,
         limit: int,
@@ -165,7 +166,7 @@ class HttpRecurringService:
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             owner_id = authenticated.owner.owner_id
@@ -193,14 +194,14 @@ class HttpRecurringService:
 
     async def get_schedule(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         schedule_id: UUID,
     ) -> RecurringScheduleSnapshot:
         now = self._now()
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             return await GetRecurringSchedule(uow.recurring)(
@@ -210,7 +211,7 @@ class HttpRecurringService:
 
     async def list_instances(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         schedule_id: UUID,
         *,
         limit: int,
@@ -220,7 +221,7 @@ class HttpRecurringService:
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             owner_id = authenticated.owner.owner_id
@@ -244,14 +245,14 @@ class HttpRecurringService:
 
     async def get_instance(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         instance_id: UUID,
     ) -> RecurringInstanceSnapshot:
         now = self._now()
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             return await GetRecurringInstance(uow.recurring)(

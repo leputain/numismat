@@ -42,17 +42,27 @@ class User(Base):
     timezone: Mapped[str] = mapped_column(String(64), default="Europe/Moscow")
     base_currency: Mapped[str] = mapped_column(String(3), default="RUB")
     fast_mode: Mapped[bool] = mapped_column(Boolean, default=True)
-    default_account_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey(
-            "accounts.id",
-            use_alter=True,
-            name="fk_users_default_account_id",
-            ondelete="SET NULL",
-        )
-    )
+    default_account_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    __table_args__ = (
+        UniqueConstraint(
+            "telegram_user_id",
+            "telegram_chat_id",
+            name="uq_users_telegram_user_chat",
+        ),
+        CheckConstraint(
+            "telegram_chat_id IS NULL OR telegram_chat_id = telegram_user_id",
+            name="users_private_telegram_chat_check",
+        ),
+        ForeignKeyConstraint(
+            ["default_account_id", "id"],
+            ["accounts.id", "accounts.user_id"],
+            name="fk_users_default_account_owner",
+            use_alter=True,
+        ),
     )
 
 
@@ -211,7 +221,7 @@ class Category(Base):
     name: Mapped[str] = mapped_column(String(100))
     slug: Mapped[str] = mapped_column(String(100))
     emoji: Mapped[str] = mapped_column(String(8), default="")
-    parent_id: Mapped[UUID | None] = mapped_column(ForeignKey("categories.id"))
+    parent_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -221,6 +231,11 @@ class Category(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "kind", "slug"),
         UniqueConstraint("id", "user_id", "kind", name="uq_categories_id_user_kind"),
+        ForeignKeyConstraint(
+            ["parent_id", "user_id", "kind"],
+            ["categories.id", "categories.user_id", "categories.kind"],
+            name="fk_categories_parent_owner_kind",
+        ),
         CheckConstraint("kind IN ('expense', 'income')", name="categories_kind_check"),
         CheckConstraint("version >= 1", name="categories_version_check"),
     )
@@ -431,7 +446,7 @@ class RecurringInstance(Base):
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     attempt_count: Mapped[int] = mapped_column(SmallInteger, default=0)
     failure_code: Mapped[str | None] = mapped_column(String(32))
-    draft_id: Mapped[UUID | None] = mapped_column(ForeignKey("drafts.id", ondelete="SET NULL"))
+    draft_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     skipped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
@@ -505,6 +520,11 @@ class RecurringInstance(Base):
             ["category_id", "user_id", "type"],
             ["categories.id", "categories.user_id", "categories.kind"],
             name="fk_recurring_instances_category_owner_kind",
+        ),
+        ForeignKeyConstraint(
+            ["draft_id", "user_id"],
+            ["drafts.id", "drafts.user_id"],
+            name="fk_recurring_instances_draft_owner",
         ),
         Index(
             "ix_recurring_instances_pending_due",
@@ -750,7 +770,7 @@ class ImportRow(Base):
         default="pending",
         server_default=text("'pending'"),
     )
-    draft_id: Mapped[UUID | None] = mapped_column(ForeignKey("drafts.id", ondelete="SET NULL"))
+    draft_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -766,6 +786,11 @@ class ImportRow(Base):
             ["import_batches.id", "import_batches.user_id"],
             name="fk_import_rows_batch_owner",
             ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["draft_id", "user_id"],
+            ["drafts.id", "drafts.user_id"],
+            name="fk_import_rows_draft_owner",
         ),
         CheckConstraint("position BETWEEN 1 AND 2000", name="import_rows_position_check"),
         CheckConstraint("type IN ('expense', 'income')", name="import_rows_type_check"),
@@ -853,6 +878,7 @@ class Transaction(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, default=1)
     __table_args__ = (
+        UniqueConstraint("id", "user_id", name="uq_transactions_id_user_id"),
         CheckConstraint("amount_minor > 0", name="transactions_amount_minor_check"),
         CheckConstraint(
             "amount_minor <= 9223372036854775807",
@@ -952,6 +978,11 @@ class TelegramResponseOutbox(Base):
         UniqueConstraint(
             "update_id", "sequence", name="uq_telegram_response_outbox_update_sequence"
         ),
+        ForeignKeyConstraint(
+            ["owner_telegram_user_id", "chat_id"],
+            ["users.telegram_user_id", "users.telegram_chat_id"],
+            name="fk_telegram_response_outbox_user_chat",
+        ),
         CheckConstraint("sequence >= 0", name="telegram_response_outbox_sequence_check"),
         CheckConstraint(
             "method IN ('send_message', 'edit_message_text', 'send_csv_export')",
@@ -1021,6 +1052,7 @@ class Draft(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
     __table_args__ = (
+        UniqueConstraint("id", "user_id", name="uq_drafts_id_user_id"),
         CheckConstraint("schema_version >= 1", name="drafts_schema_version_check"),
         CheckConstraint("revision >= 1", name="drafts_revision_check"),
     )
@@ -1067,14 +1099,21 @@ class AuditEvent(Base):
     __tablename__ = "audit_events"
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid7)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
-    transaction_id: Mapped[UUID | None] = mapped_column(ForeignKey("transactions.id"))
+    transaction_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     action: Mapped[str] = mapped_column(String(30))
     data: Mapped[dict[str, object]] = mapped_column(
         JSONB, default=dict, server_default=text("'{}'::jsonb")
     )
     undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    __table_args__ = (Index("ix_audit_events_user_created", "user_id", "created_at"),)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["transaction_id", "user_id"],
+            ["transactions.id", "transactions.user_id"],
+            name="fk_audit_events_transaction_owner",
+        ),
+        Index("ix_audit_events_user_created", "user_id", "created_at"),
+    )
 
 
 class CategoryRule(Base):

@@ -8,7 +8,7 @@ from uuid import UUID
 from finbot.adapters.database.repositories.http_idempotency import IdempotencyResultKind
 from finbot.adapters.http.auth.crypto import HttpSecurityDigester
 from finbot.adapters.http.auth.ports import AuthUnitOfWorkFactory
-from finbot.adapters.http.auth.service import SessionAuthenticator
+from finbot.adapters.http.auth.service import SessionAuthenticator, SessionCredentials
 from finbot.adapters.http.bank_imports.cursor import BankImportCursorCodec
 from finbot.adapters.http.bank_imports.ports import BankImportQueryUnitOfWorkFactory
 from finbot.adapters.http.mutations.ports import MutationUnitOfWork
@@ -98,9 +98,10 @@ class HttpBankImportService:
         admission_uow_factory: AuthUnitOfWorkFactory,
         query_uow_factory: BankImportQueryUnitOfWorkFactory,
         mutation_executor: HttpMutationExecutor,
+        allowed_telegram_user_ids: frozenset[int] | None = None,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
-        self._authenticator = SessionAuthenticator(digester)
+        self._authenticator = SessionAuthenticator(digester, allowed_telegram_user_ids)
         self._preparer = preparer
         self._cursor_codec = cursor_codec
         self._admission_uow_factory = admission_uow_factory
@@ -121,6 +122,7 @@ class HttpBankImportService:
             authenticated = await self._authenticator.authenticate_mutation(
                 auth,
                 credentials.session_token,
+                credentials.session_binding,
                 credentials.csrf_cookie,
                 credentials.csrf_header,
                 now=self._now(),
@@ -179,7 +181,7 @@ class HttpBankImportService:
 
     async def list_batches(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         *,
         state: BankImportBatchState | None,
         limit: int,
@@ -188,7 +190,7 @@ class HttpBankImportService:
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=self._now(),
             )
             owner_id = authenticated.owner.owner_id
@@ -212,13 +214,13 @@ class HttpBankImportService:
 
     async def get_batch(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         batch_id: UUID,
     ) -> BankImportBatchSnapshot:
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=self._now(),
             )
             return await GetBankImportBatch(uow.bank_imports)(
@@ -228,7 +230,7 @@ class HttpBankImportService:
 
     async def list_rows(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         batch_id: UUID,
         *,
         state: BankImportRowState | None,
@@ -238,7 +240,7 @@ class HttpBankImportService:
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=self._now(),
             )
             owner_id = authenticated.owner.owner_id
@@ -273,14 +275,14 @@ class HttpBankImportService:
 
     async def get_row(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         batch_id: UUID,
         row_id: UUID,
     ) -> BankImportRowSnapshot:
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=self._now(),
             )
             return await GetBankImportRow(uow.bank_imports)(
@@ -291,14 +293,14 @@ class HttpBankImportService:
 
     async def candidates(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         batch_id: UUID,
         row_id: UUID,
     ) -> tuple[ReconciliationCandidate, ...]:
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=self._now(),
             )
             return await ListReconciliationCandidates(uow.bank_imports)(

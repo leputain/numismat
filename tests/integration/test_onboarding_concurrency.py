@@ -13,7 +13,10 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from finbot.adapters.database.models import Account, Category, User
-from finbot.adapters.database.services.onboarding import ensure_owner_user
+from finbot.adapters.database.services.onboarding import (
+    OwnerChatBindingError,
+    ensure_owner_user,
+)
 from finbot.application.services.onboarding import (
     DEFAULT_ACCOUNT_SLUG,
     INITIAL_CATEGORIES,
@@ -62,7 +65,7 @@ async def test_concurrent_first_use_creates_one_complete_catalog() -> None:
             user = await ensure_owner_user(
                 session,
                 telegram_user_id=telegram_user_id,
-                telegram_chat_id=100_000_001,
+                telegram_chat_id=telegram_user_id,
                 locale="ru_RU",
                 timezone="Europe/Moscow",
                 currency=" rub ",
@@ -80,7 +83,7 @@ async def test_concurrent_first_use_creates_one_complete_catalog() -> None:
             user = await ensure_owner_user(
                 session,
                 telegram_user_id=telegram_user_id,
-                telegram_chat_id=100_000_002,
+                telegram_chat_id=telegram_user_id,
                 locale="ru_RU",
                 timezone="Europe/Moscow",
                 currency="RUB",
@@ -112,7 +115,7 @@ async def test_concurrent_first_use_creates_one_complete_catalog() -> None:
 
             assert user is not None
             assert user_count == 1
-            assert user.telegram_chat_id == 100_000_002
+            assert user.telegram_chat_id == telegram_user_id
             assert user.base_currency == "RUB"
             assert len(accounts) == 1
             assert accounts[0].slug == DEFAULT_ACCOUNT_SLUG
@@ -129,7 +132,7 @@ async def test_concurrent_first_use_creates_one_complete_catalog() -> None:
 
 
 @pytest.mark.asyncio
-async def test_existing_owner_is_refreshed_before_returning_identity_object() -> None:
+async def test_existing_owner_is_refreshed_without_allowing_chat_rebind() -> None:
     engine = create_async_engine(DATABASE_URL)
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
     telegram_user_id = _synthetic_telegram_user_id()
@@ -139,7 +142,7 @@ async def test_existing_owner_is_refreshed_before_returning_identity_object() ->
         async with factory() as setup:
             user = User(
                 telegram_user_id=telegram_user_id,
-                telegram_chat_id=100_000_003,
+                telegram_chat_id=telegram_user_id,
                 base_currency="RUB",
             )
             setup.add(user)
@@ -169,7 +172,7 @@ async def test_existing_owner_is_refreshed_before_returning_identity_object() ->
             loaded = await ensure_owner_user(
                 stale_session,
                 telegram_user_id=telegram_user_id,
-                telegram_chat_id=100_000_004,
+                telegram_chat_id=telegram_user_id,
                 locale="ru_RU",
                 timezone="Europe/Moscow",
                 currency="EUR",
@@ -178,6 +181,18 @@ async def test_existing_owner_is_refreshed_before_returning_identity_object() ->
             assert loaded.base_currency == "USD"
             assert loaded.default_account_id == account.id
             await stale_session.rollback()
+
+        async with factory() as rejected:
+            with pytest.raises(OwnerChatBindingError):
+                await ensure_owner_user(
+                    rejected,
+                    telegram_user_id=telegram_user_id,
+                    telegram_chat_id=telegram_user_id + 1,
+                    locale="ru_RU",
+                    timezone="Europe/Moscow",
+                    currency="RUB",
+                )
+            await rejected.rollback()
     finally:
         if user_id is not None:
             await _remove_owner(engine, user_id)

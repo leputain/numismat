@@ -10,21 +10,11 @@ export function AuthBoundary({ children }: PropsWithChildren) {
     case "authenticated":
       return children;
     case "booting":
-    case "checking_session":
       return <LoadingState />;
     case "authenticating_telegram":
       return <LoadingState message="Подтверждаем доступ через Telegram…" />;
     case "auth_result_unknown":
       return <LoadingState message="Проверяем результат входа…" />;
-    case "session_check_retryable":
-      return (
-        <AuthErrorState
-          actionLabel="Повторить проверку"
-          description="Сеть временно недоступна. Telegram-данные ещё не использованы."
-          onAction={() => void auth.retrySessionCheck()}
-          title="Не удалось проверить сессию"
-        />
-      );
     case "sdk_unavailable":
       return (
         <AuthErrorState
@@ -38,7 +28,7 @@ export function AuthBoundary({ children }: PropsWithChildren) {
       return (
         <AuthErrorState
           actionLabel="Закрыть"
-          description="Этот приватный экземпляр доступен только его владельцу."
+          description="Этот Telegram-профиль не входит в список разрешённых пользователей."
           onAction={auth.closeMiniApp}
           title="Доступ запрещён"
         />

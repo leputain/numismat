@@ -20,11 +20,13 @@ from finbot.bootstrap import build_dispatcher
 @dataclass(slots=True)
 class _Chat:
     id: int
+    type: str = "private"
 
 
 class _Message:
     def __init__(self) -> None:
         self.chat = _Chat(93_000_003)
+        self.from_user = _Chat(93_000_003)
 
 
 class _Controller:
@@ -70,7 +72,7 @@ def _router(
     router = CsvExportRouter(
         cast(CsvExportController, controller),
         cast(CsvExportDirectDelivery, delivery),
-        CsvExportRequestDefaults(92_000_002, "ru", "UTC", "RUB"),
+        CsvExportRequestDefaults("ru", "UTC", "RUB"),
     )
     return router, controller, delivery
 
@@ -97,6 +99,8 @@ async def test_tracked_export_leaves_delivery_to_durable_outbox() -> None:
     await router.export_csv(cast(Message, _Message()), finbot_update_id=91_000_001)
 
     assert controller.calls[0].update_id == 91_000_001
+    assert controller.calls[0].owner_telegram_user_id == 93_000_003
+    assert controller.calls[0].chat_id == 93_000_003
     assert delivery.receipts == []
     assert events == ["controller.commit"]
 
@@ -138,7 +142,7 @@ def test_bootstrap_registers_focused_export_router_before_text_catch_all() -> No
 
 
 def test_export_request_defaults_hide_private_identifiers_from_repr() -> None:
-    defaults = CsvExportRequestDefaults(92_000_002, "private-locale", "UTC", "RUB")
+    defaults = CsvExportRequestDefaults("private-locale", "UTC", "RUB")
     request = defaults.request(None, cast(Message, _Message()))
 
     rendered = f"{defaults!r} {request!r}"

@@ -2,9 +2,11 @@
 
 ## Модель угроз
 
-Finbot рассчитан на одного владельца. В scope входят: посторонние Telegram-пользователи, утечка в group chat,
+Finbot рассчитан на закрытый operator-managed allowlist до 32 независимых владельцев ledger. В scope входят:
+посторонние и удалённые из списка Telegram-пользователи, cross-tenant object/cookie confusion, утечка в group chat,
 повторные и переставленные updates/callbacks, устаревшие UI-кнопки, malformed input, компрометация credentials или БД,
-утечка чувствительных данных в логи и непроверяемые backup/restore процедуры.
+утечка чувствительных данных в логи и непроверяемые backup/restore процедуры. Общий семейный ledger, RBAC и
+self-registration отсутствуют: один verified Telegram subject всегда соответствует одному изолированному ledger.
 
 Telegram не является end-to-end encrypted Secret Chat для ботов. Не отправляйте Finbot номера карт, CVV, банковские
 пароли, коды подтверждения, документы и иные секреты. Перед отправкой банковского скриншота обрежьте номера карты,
@@ -12,8 +14,15 @@ Telegram не является end-to-end encrypted Secret Chat для бото�
 
 ## Доступ и обработка updates
 
-- Каждый update принимается только при точном совпадении числового `OWNER_TELEGRAM_USER_ID` и `chat.type == private`.
-  Username не является идентификатором доступа.
+- Каждый update принимается только при membership actor ID в полном `TELEGRAM_ALLOWED_USER_IDS`, условии
+  `chat.type == private` и точном `actor_id == chat_id`. Пустой allowlist означает singleton
+  `OWNER_TELEGRAM_USER_ID`; primary обязан входить в явно заданный список. Username не является идентификатором
+  доступа.
+- Middleware создаёт immutable principal из проверенной пары actor/chat. Callback message может принадлежать боту,
+  поэтому downstream никогда не выводит пользователя из `message.from_user`: principal передаётся через dispatch
+  scope во все mutation/query/outbox context factories.
+- Первая committed onboarding-транзакция создаёт отдельного `users` owner и его seed catalog. Private chat binding
+  допускает только `NULL -> actor_id`, после чего неизменяем; несовпадение отклоняет всю транзакцию.
 - Updates обрабатываются последовательно. Telegram offset увеличивается только после успешного завершения handler;
   ошибка удерживает текущий update для повторной попытки с bounded backoff и не пропускает вперёд последующие.
 - `processed_updates` обеспечивает идемпотентность бизнес-обработки. Повтор одного `update_id` не должен создавать
@@ -33,6 +42,10 @@ Telegram не является end-to-end encrypted Secret Chat для бото�
   новому draft. `history_page` и `pending_history_page`, добавленные миграцией `0005`, остаются adapter-only полями
   projection/outbox, а не business payload; при downgrade `0005 -> 0004` только projection текущей ревизии
   возвращается в legacy binding.
+- Перед любым Telegram network I/O delivery выполняет owner/private-chat preflight для каждого outbox response со
+  связанным draft. Несовпадение `draft -> owner -> immutable private chat` останавливает отправку до Telegram API и не
+  устанавливает `sent_at`; presentation binder повторяет тот же guard. Это закрывает cross-tenant UI projection даже
+  при forged или legacy outbox reference.
 - Typed text маршрутизируется в фиксированном порядке: finance draft, transaction edit, settings draft, quick input.
   Только явный результат `NotApplicable` разрешает следующий controller; validation/application error или duplicate
   update завершает dispatch. Ошибочный ввод состояния не должен молча интерпретироваться как новая операция.
@@ -161,28 +174,50 @@ Production HTTP auth не имеет bypass и запускается тольк
 Public URL обязан быть одним canonical HTTPS origin без credentials, query или fragment. Signed login, logout и
 protected mutations считают один bounded ASCII `Origin` необязательной transport metadata: native WebView не
 предоставляет единый portable Origin contract. Duplicate, empty, oversized и non-ASCII Origin отклоняются. Для login
-authority задают verified Telegram HMAC, exact owner, TTL и replay denial; для logout и mutations — host-only session
-и double-submit CSRF, а для mutations дополнительно canonical idempotency key. Security key — независимые 32 random
-bytes, он не совпадает с Telegram bot token и поступает через environment или `/run/secrets/http_security_key`.
+authority задают verified Telegram HMAC, membership в process-local allowlist, TTL и replay denial; для logout и
+mutations — host-only session, совпадающий page binding и double-submit CSRF, а для mutations дополнительно canonical
+idempotency key. Любое
+одиночное bounded ASCII значение Origin принимается только как metadata и не предоставляет authority. Security key —
+независимые 32 random bytes, он не совпадает с Telegram bot token и поступает через environment или
+`/run/secrets/http_security_key`.
 
 `POST /api/v1/auth/telegram` принимает не более 12 KiB JSON и 8 KiB raw `initData`, запрещает ambiguous/duplicate
-fields и проверяет официальный Telegram HMAC до использования `user`/`auth_date`. Принимается только configured owner,
-proof младше 5 минут и не более чем на 30 секунд из будущего. Replay digest строится из verified 32-byte Telegram
-hash, поэтому reorder и эквивалентное query encoding не создают новый proof. Запись удерживается до `auth_date + TTL +
-skew`, включая logout: повтор всегда получает conflict. Если первый успешный HTTP response потерян, безопасное
-восстановление — заново открыть Mini App после истечения proof window; session token из replay не возвращается.
+fields и проверяет официальный Telegram HMAC до использования `user`/`auth_date`. Принимается только allowlisted
+subject, proof младше 5 минут и не более чем на 30 секунд из будущего. Mini App предъявляет signed `initData` при
+каждом запуске до доверия к общей WebView cookie jar. Если активная cookie принадлежит тому же verified subject,
+backend сохраняет сессию без повторного consume proof. Для другого subject старая сессия отзывается только после
+успешного fresh proof claim и заменяется новыми cookies. Replay digest строится из verified 32-byte Telegram hash,
+поэтому reorder и эквивалентное query encoding не создают новый proof; replay без активной same-subject session
+получает conflict. Запись удерживается до `auth_date + TTL + skew`, включая logout.
 
 Session и CSRF генерируются независимо с 256-bit entropy и живут один час. Браузер получает host-only cookies
 `__Host-numismat_session` (`HttpOnly; Secure; SameSite=Strict; Path=/`) и `__Host-numismat_csrf`
-(`Secure; SameSite=Strict; Path=/`). State-changing endpoint требует точного совпадения CSRF cookie/header; browser
-Origin остаётся только optional bounded transport metadata. Duplicate/empty/oversized/non-ASCII Origin и
-duplicate/oversized Cookie, CSRF, Content-Type или encoded body отклоняются fail closed. Invalid/stale session очищает
-обе cookies; CSRF failure не revoke-ит валидную session.
+(`Secure; SameSite=Strict; Path=/`). Каждый успешный auth response также возвращает `X-Session-Binding`: privacy-safe
+domain-separated HMAC от raw HttpOnly session token. Это не tenant ID и не замена session cookie; frontend хранит
+binding только в памяти страницы, не пишет в storage/URL/telemetry и отправляет с каждым protected GET, write и
+logout. Backend пересчитывает binding из текущей cookie и сравнивает его до owner/tenant lookup. State-changing
+endpoint дополнительно требует точного совпадения CSRF cookie/header; browser Origin остаётся только optional bounded
+transport metadata. Duplicate/empty/oversized/non-ASCII Origin и duplicate/oversized Cookie, binding, CSRF,
+Content-Type или encoded body отклоняются fail closed. `Set-Cookie` разрешён только успешному auth, который создаёт
+новую session; retained same-subject auth возвращает binding без rotation. Failed auth и любой protected error —
+включая invalid/expired/revoked session, binding mismatch и CSRF failure — не отправляют `Set-Cookie` и не меняют
+ambient cookies. Поэтому поздний ответ старой страницы A не может стереть валидные cookies B из общей WebView jar.
 
-`GET /api/v1/auth/me` только проверяет session. `POST /api/v1/auth/logout` берёт exclusive row lock и инвалидирует
-её; protected mutation удерживает shared session lock в той же DB transaction до domain/idempotency
-commit. Cookie headers создаются только после commit. Auth logs содержат только allowlisted outcome/reason codes:
-Telegram IDs, raw/canonical `initData`, cookies, tokens, CSRF, Origin, headers и validation payload не журналируются.
+`GET /api/v1/auth/me` проверяет session cookie вместе с page binding. Любая session read/mutation/logout дополнительно
+проверяет, что её сохранённый Telegram subject всё ещё входит в текущий allowlist. `POST /api/v1/auth/logout` берёт
+exclusive row lock и инвалидирует её; protected mutation удерживает shared session lock в той же DB transaction до
+domain/idempotency commit. Успешный logout отвечает `204` без `Set-Cookie`: frontend удаляет page-memory binding и
+protected state, а оставшаяся отозванная cookie не предоставляет authority и перезаписывается новым successful signed
+login. New-session cookie headers создаются только после commit. Auth logs содержат только allowlisted
+outcome/reason codes: Telegram IDs, raw/canonical `initData`, cookies, tokens, session binding, CSRF, Origin, headers и
+validation payload не журналируются.
+
+Frontend связывает каждый async auth result с монотонной attempt epoch и отбрасывает результат, если более новая
+попытка уже началась. `hidden` и любой `pagehide` синхронно снимают protected UI, заменяют tenant QueryClient и
+инвалидируют epoch до background/bfcache. Уже authenticated страница сохраняет binding только в памяти для resume:
+`visible` или persisted `pageshow` выполняет только `/auth/me` с прежней cookie+binding, не воспроизводя старый
+`initData`. Если suspend застал auth незавершённой, binding очищается; failed resume переводит UI в reopen-required.
+Поэтому ни cached DOM, ни поздний response, ни stale launch proof не возвращают предыдущего tenant в UI.
 
 ## HTTP mutations и idempotency
 
@@ -192,8 +227,9 @@ HTTP mutation surface является закрытым typed API: persistent dr
 только как bounded `supported=false` projection без business payload. Draft-changing endpoints для неподдерживаемой
 schema возвращают `409 invalid_state` и не изменяют или удаляют такой draft.
 
-Каждая mutation требует валидную host-only session, double-submit CSRF и один canonical 43-character
-`Idempotency-Key`; `Origin`, если WebView его передал, валидируется только как bounded однозначная ASCII metadata.
+Каждая mutation требует валидную host-only session, совпадающий page-memory `X-Session-Binding`, double-submit CSRF и
+один canonical 43-character `Idempotency-Key`; `Origin`, если WebView его передал, валидируется только как bounded
+однозначная ASCII metadata.
 JSON ограничен 12 KiB; duplicate/unknown fields, encoded body и non-canonical values отклоняются.
 В PostgreSQL попадают только keyed digests семантического fingerprint и минимальный результат.
 
@@ -214,7 +250,8 @@ commit удаляет consumed draft, второй не создаёт transacti
 ## HTTP finance reads
 
 Dashboard, period/comparison reports, transaction detail и active transaction list доступны только по валидной
-session cookie. Session lookup и все SQL одного ответа выполняются в одной `READ ONLY REPEATABLE READ` transaction;
+session cookie вместе с совпадающим `X-Session-Binding`. Binding проверяется до tenant lookup; session lookup и все SQL
+одного ответа выполняются в одной `READ ONLY REPEATABLE READ` transaction;
 ошибка setup гарантированно закрывает inner transaction/session. Ответы `/api/v1/` всегда получают `no-store,
 no-cache`, `Pragma: no-cache` и `Referrer-Policy: no-referrer`.
 
@@ -262,7 +299,8 @@ auth, чтение версии и финансовых агрегатов в о
 
 `recurring-runner` — отдельный hardened DB-only process без Telegram token, HTTP key и внешней сети. Он получает
 только runtime database secret, выполняет две bounded транзакционные фазы с `pg_try_advisory_xact_lock`, локальными
-lock/statement timeouts и owner-first locking. Один tick рассматривает максимум 32 schedules и 16 owners; pending
+lock/statement timeouts и owner-first locking. Materialization берёт максимум одну ближайшую due-схему на owner, после
+чего общий tick рассматривает максимум 32 schedules; staging рассматривает максимум 16 owners. Pending
 probe читает не более 33 UUID и запрещает 33-й unstaged instance. Активный draft не изменяется, не suspend-ится и
 не получает скрытый intent: due instance остаётся pending с backoff.
 
@@ -294,6 +332,12 @@ CSP запрещает everything-by-default, framing, objects, workers и вн�
 `/assets/` — immutable cache, а missing asset не превращается в SPA. `/api/*` проксируется без retry, client identity
 forwarding и configurable upstream; Origin, Cookie и Set-Cookie сохраняются как same-origin auth contract.
 
+Alembic `0012_multitenant_integrity` перед DDL берёт `ACCESS EXCLUSIVE` locks и fail closed сканирует существующие
+cross-owner/private-chat нарушения. Composite foreign keys связывают owner с default account, parent category, audit
+transaction, recurring/import draft и Telegram outbox; `users.telegram_chat_id`, если задан, обязан равняться
+`telegram_user_id`. Это database defense-in-depth поверх обязательных owner predicates. PostgreSQL RLS отложен до
+отдельного проектирования ролей/контекста для pre-auth, cleanup, runner, outbox и process-fixed MCP.
+
 Access log edge состоит только из event code, route group, result и numeric status. URI/query, client IP, user-agent,
 referrer, headers, cookies, body, byte counts, upstream и timing отсутствуют; error log ограничен critical level. Нативные
 Telegram mobile/desktop WebView являются поддержанным контуром, iframe embedding fail closed запрещён.
@@ -313,6 +357,20 @@ cancellation не блокируют owner mutations. Лог содержит т
 Learned category resolution не загружает неограниченный набор правил: owner/kind namespace допускает максимум 512,
 reader запрашивает 513 и fail closed при legacy overflow. Новый rule capacity проверяется под owner row lock;
 обновление существующего normalized pattern остаётся разрешённым, а deterministic precedence не меняется.
+
+## Отзыв доступа и rollback
+
+`TELEGRAM_ALLOWED_USER_IDS` — полный, а не добавочный список. Он загружается при старте: удаление ID вступает в силу
+только после согласованного restart `bot` и `api`; затем bot отклоняет updates, а API отклоняет даже ещё не истёкшую
+session. Данные пользователя, audit trail и расписания не удаляются. `recurring-runner` не получает Telegram allowlist
+и продолжает создавать review drafts для активных schedules, поэтому до отзыва доступа operator должен pause-нуть
+их либо остановить runner. Destructive offboarding в текущем scope отсутствует.
+
+Безопасный rollout/rollback начинается в singleton-режиме с пустым `TELEGRAM_ALLOWED_USER_IDS`. После проверки
+основного пользователя operator задаёт полный canonical список, включающий `OWNER_TELEGRAM_USER_ID`, и одновременно
+перезапускает bot/API. Возврат к пустому значению восстанавливает доступ только primary owner; primary остаётся
+process-fixed MCP principal, но не получает cross-tenant прав через Telegram или HTTP. Логи rollout и отказов остаются
+value-free: только фиксированные event/result/reason, без allowlist, ID, cookies и финансовых значений.
 
 ## Backup и restore
 

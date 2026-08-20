@@ -8,12 +8,20 @@ from fastapi import APIRouter, Path, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import TypeAdapter
 
-from finbot.adapters.http.auth.service import CsrfRejectedError, SessionInvalidError
+from finbot.adapters.http.auth.request import (
+    SESSION_BINDING_OPENAPI_PARAMETER,
+    session_credentials,
+)
+from finbot.adapters.http.auth.service import (
+    CsrfRejectedError,
+    SessionBindingMismatchError,
+    SessionCredentials,
+    SessionInvalidError,
+)
 from finbot.adapters.http.errors import HttpApiError, HttpErrorCode
 from finbot.adapters.http.finance.request import (
     CANONICAL_UUID_PATTERN,
     canonical_uuid,
-    session_token,
     strict_query,
 )
 from finbot.adapters.http.mutations.request import bounded_json_body, mutation_credentials
@@ -57,9 +65,13 @@ from finbot.application.revision_mutations import (
 )
 from finbot.domain.transactions import TransactionType
 
-_SESSION_SECURITY: dict[str, Any] = {"security": [{"SessionCookie": []}]}
+_SESSION_SECURITY: dict[str, Any] = {
+    "security": [{"SessionCookie": []}],
+    "parameters": [SESSION_BINDING_OPENAPI_PARAMETER],
+}
 _CANONICAL_DIGEST_PATTERN = r"^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
 _MUTATION_PARAMETERS: list[dict[str, Any]] = [
+    SESSION_BINDING_OPENAPI_PARAMETER,
     {
         "description": (
             "Optional bounded transport metadata supplied by the user agent; "
@@ -157,15 +169,19 @@ def _mutation_openapi[ModelT](adapter: TypeAdapter[ModelT]) -> dict[str, Any]:
 
 async def _safe_read[ResultT](
     request: Request,
-    operation: Callable[[str], Awaitable[ResultT]],
+    operation: Callable[[SessionCredentials], Awaitable[ResultT]],
 ) -> ResultT:
     try:
-        return await operation(session_token(request))
+        return await operation(session_credentials(request))
+    except SessionBindingMismatchError as exc:
+        raise HttpApiError(
+            status_code=401,
+            code=HttpErrorCode.AUTH_SESSION_INVALID,
+        ) from exc
     except SessionInvalidError as exc:
         raise HttpApiError(
             status_code=401,
             code=HttpErrorCode.AUTH_SESSION_INVALID,
-            clear_auth_cookies=True,
         ) from exc
 
 
@@ -176,11 +192,15 @@ async def _safe_mutation(
         return await operation()
     except CsrfRejectedError as exc:
         raise HttpApiError(status_code=403, code=HttpErrorCode.CSRF_FAILED) from exc
+    except SessionBindingMismatchError as exc:
+        raise HttpApiError(
+            status_code=401,
+            code=HttpErrorCode.AUTH_SESSION_INVALID,
+        ) from exc
     except SessionInvalidError as exc:
         raise HttpApiError(
             status_code=401,
             code=HttpErrorCode.AUTH_SESSION_INVALID,
-            clear_auth_cookies=True,
         ) from exc
     except IdempotencyKeyReuseError as exc:
         raise HttpApiError(
@@ -279,8 +299,8 @@ def mutation_router(
         strict_query(request, allowed=frozenset())
         parsed_id = canonical_uuid(draft_id)
 
-        async def execute(raw_session: str) -> DraftSnapshot:
-            return await service.draft(raw_session, parsed_id)
+        async def execute(credentials: SessionCredentials) -> DraftSnapshot:
+            return await service.draft(credentials, parsed_id)
 
         draft = await _safe_read(request, execute)
         return draft_response(project_public_draft(draft))

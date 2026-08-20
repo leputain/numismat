@@ -7,7 +7,7 @@ from uuid import UUID
 
 from finbot.adapters.database.repositories.http_idempotency import IdempotencyResultKind
 from finbot.adapters.http.auth.crypto import HttpSecurityDigester
-from finbot.adapters.http.auth.service import SessionAuthenticator
+from finbot.adapters.http.auth.service import SessionAuthenticator, SessionCredentials
 from finbot.adapters.http.catalogs.ports import CatalogQueryUnitOfWorkFactory
 from finbot.adapters.http.mutations.ports import MutationUnitOfWork
 from finbot.adapters.http.mutations.service import (
@@ -90,9 +90,10 @@ class HttpCatalogService:
         digester: HttpSecurityDigester,
         query_uow_factory: CatalogQueryUnitOfWorkFactory,
         mutation_executor: HttpMutationExecutor,
+        allowed_telegram_user_ids: frozenset[int] | None = None,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
-        self._authenticator = SessionAuthenticator(digester)
+        self._authenticator = SessionAuthenticator(digester, allowed_telegram_user_ids)
         self._query_uow_factory = query_uow_factory
         self._mutation_executor = mutation_executor
         self._clock = clock
@@ -103,12 +104,12 @@ class HttpCatalogService:
             raise ValueError("catalog query clock must be timezone-aware")
         return value.astimezone(UTC)
 
-    async def accounts(self, raw_session_token: str, *, archived: bool) -> AccountCatalog:
+    async def accounts(self, credentials: SessionCredentials, *, archived: bool) -> AccountCatalog:
         now = self._now()
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             owner_id = authenticated.owner.owner_id
@@ -118,7 +119,7 @@ class HttpCatalogService:
 
     async def categories(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         *,
         kind: TransactionType | None,
         archived: bool,
@@ -127,7 +128,7 @@ class HttpCatalogService:
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             return await ListBoundedCategories(uow.catalogs)(

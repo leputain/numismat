@@ -81,7 +81,7 @@ def _app(
         kwargs["token_factory"] = lambda: tokens
     service = TelegramAuthService(
         bot_token=BOT_TOKEN,
-        owner_telegram_user_id=owner_telegram_user_id,
+        allowed_telegram_user_ids=frozenset((owner_telegram_user_id,)),
         digester=HttpSecurityDigester(SECURITY_KEY),
         uow_factory=SqlAlchemyAuthUnitOfWorkFactory(factory),
         clock=clock,
@@ -143,18 +143,30 @@ async def test_http_auth_persists_only_keyed_state_and_enforces_session_lifecycl
                 headers={"Origin": ORIGIN},
                 json={"initData": proof},
             )
-            me = await client.get("/api/v1/auth/me")
+            session_binding = login.headers["X-Session-Binding"]
+            me = await client.get(
+                "/api/v1/auth/me",
+                headers={"X-Session-Binding": session_binding},
+            )
             logout = await client.post(
                 "/api/v1/auth/logout",
-                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf_token},
+                headers={
+                    "Origin": ORIGIN,
+                    "X-CSRF-Token": csrf_token,
+                    "X-Session-Binding": session_binding,
+                },
             )
-            after_logout = await client.get("/api/v1/auth/me")
+            after_logout = await client.get(
+                "/api/v1/auth/me",
+                headers={"X-Session-Binding": session_binding},
+            )
 
         assert login.status_code == 200
         assert me.status_code == 200
         assert logout.status_code == 204
+        assert logout.headers.get_list("set-cookie") == []
         assert after_logout.status_code == 401
-        assert len(after_logout.headers.get_list("set-cookie")) == 2
+        assert after_logout.headers.get_list("set-cookie") == []
 
         async with factory() as session:
             stored_session = await session.scalar(
@@ -241,13 +253,14 @@ async def test_http_auth_claim_rolls_back_when_session_creation_fails() -> None:
     first_proof = _signed_init_data(telegram_user_id, int(NOW.timestamp()))
     second_proof = _signed_init_data(telegram_user_id, int(NOW.timestamp()) + 1)
     try:
-        async with _client(first_app) as client:
-            first = await client.post(
+        async with _client(first_app) as first_client:
+            first = await first_client.post(
                 "/api/v1/auth/telegram",
                 headers={"Origin": ORIGIN},
                 json={"initData": first_proof},
             )
-            failed = await client.post(
+        async with _client(first_app) as second_client:
+            failed = await second_client.post(
                 "/api/v1/auth/telegram",
                 headers={"Origin": ORIGIN},
                 json={"initData": second_proof},

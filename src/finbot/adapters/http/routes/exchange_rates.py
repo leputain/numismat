@@ -8,7 +8,16 @@ from fastapi import APIRouter, Path, Request
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 
-from finbot.adapters.http.auth.service import CsrfRejectedError, SessionInvalidError
+from finbot.adapters.http.auth.request import (
+    SESSION_BINDING_OPENAPI_PARAMETER,
+    session_credentials,
+)
+from finbot.adapters.http.auth.service import (
+    CsrfRejectedError,
+    SessionBindingMismatchError,
+    SessionCredentials,
+    SessionInvalidError,
+)
 from finbot.adapters.http.errors import HttpApiError, HttpErrorCode
 from finbot.adapters.http.exchange_rates.cursor import (
     EXCHANGE_RATE_CURSOR_LENGTH,
@@ -24,7 +33,6 @@ from finbot.adapters.http.exchange_rates.service import (
 from finbot.adapters.http.finance.request import (
     CANONICAL_UUID_PATTERN,
     canonical_uuid,
-    session_token,
     strict_query,
     utc_timestamp,
     validate_period,
@@ -56,13 +64,17 @@ from finbot.application.exchange_rates import (
     RateVersionSnapshot,
 )
 
-_SESSION_SECURITY: dict[str, Any] = {"security": [{"SessionCookie": []}]}
+_SESSION_SECURITY: dict[str, Any] = {
+    "security": [{"SessionCookie": []}],
+    "parameters": [SESSION_BINDING_OPENAPI_PARAMETER],
+}
 _CANONICAL_DIGEST_PATTERN = r"^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
 _CURSOR = re.compile(rf"[A-Za-z0-9_-]{{{EXCHANGE_RATE_CURSOR_LENGTH}}}\Z")
 _LIMIT = re.compile(r"(?:[1-9]|[1-4][0-9]|50)\Z")
 _VERSION_QUERY = frozenset({"limit", "cursor"})
 _CONVERTED_QUERY = frozenset({"version_id", "start", "end"})
 _MUTATION_PARAMETERS: list[dict[str, Any]] = [
+    SESSION_BINDING_OPENAPI_PARAMETER,
     {
         "description": (
             "Optional bounded transport metadata supplied by the user agent; "
@@ -158,15 +170,19 @@ def _cursor(value: str | None) -> str | None:
 
 async def _safe_read[ResultT](
     request: Request,
-    operation: Callable[[str], Awaitable[ResultT]],
+    operation: Callable[[SessionCredentials], Awaitable[ResultT]],
 ) -> ResultT:
     try:
-        return await operation(session_token(request))
+        return await operation(session_credentials(request))
+    except SessionBindingMismatchError as exc:
+        raise HttpApiError(
+            status_code=401,
+            code=HttpErrorCode.AUTH_SESSION_INVALID,
+        ) from exc
     except SessionInvalidError as exc:
         raise HttpApiError(
             status_code=401,
             code=HttpErrorCode.AUTH_SESSION_INVALID,
-            clear_auth_cookies=True,
         ) from exc
     except InvalidExchangeRateCursorError as exc:
         raise HttpApiError(status_code=422, code=HttpErrorCode.INVALID_CURSOR) from exc
@@ -177,11 +193,15 @@ async def _safe_mutation(operation: Callable[[], Awaitable[MutationReceipt]]) ->
         return await operation()
     except CsrfRejectedError as exc:
         raise HttpApiError(status_code=403, code=HttpErrorCode.CSRF_FAILED) from exc
+    except SessionBindingMismatchError as exc:
+        raise HttpApiError(
+            status_code=401,
+            code=HttpErrorCode.AUTH_SESSION_INVALID,
+        ) from exc
     except SessionInvalidError as exc:
         raise HttpApiError(
             status_code=401,
             code=HttpErrorCode.AUTH_SESSION_INVALID,
-            clear_auth_cookies=True,
         ) from exc
     except IdempotencyKeyReuseError as exc:
         raise HttpApiError(
@@ -218,8 +238,8 @@ def exchange_rate_router(
     async def list_exchange_rate_sources(request: Request) -> RateSourcesResponse:
         strict_query(request, allowed=frozenset())
 
-        async def execute(raw_session: str) -> tuple[RateSourceSnapshot, ...]:
-            return await service.list_sources(raw_session)
+        async def execute(credentials: SessionCredentials) -> tuple[RateSourceSnapshot, ...]:
+            return await service.list_sources(credentials)
 
         return sources_response(await _safe_read(request, execute))
 
@@ -230,6 +250,7 @@ def exchange_rate_router(
         openapi_extra={
             **_SESSION_SECURITY,
             "parameters": [
+                SESSION_BINDING_OPENAPI_PARAMETER,
                 {
                     "in": "query",
                     "name": "limit",
@@ -269,9 +290,9 @@ def exchange_rate_router(
         query = strict_query(request, allowed=_VERSION_QUERY)
         parsed_id = canonical_uuid(source_id)
 
-        async def execute(raw_session: str) -> HttpRateVersionPage:
+        async def execute(credentials: SessionCredentials) -> HttpRateVersionPage:
             return await service.list_versions(
-                raw_session,
+                credentials,
                 parsed_id,
                 limit=_limit(query.get("limit")),
                 raw_cursor=_cursor(query.get("cursor")),
@@ -295,8 +316,8 @@ def exchange_rate_router(
         strict_query(request, allowed=frozenset())
         parsed_id = canonical_uuid(version_id)
 
-        async def execute(raw_session: str) -> RateVersionSnapshot:
-            return await service.get_version(raw_session, parsed_id)
+        async def execute(credentials: SessionCredentials) -> RateVersionSnapshot:
+            return await service.get_version(credentials, parsed_id)
 
         return version_response(await _safe_read(request, execute))
 
@@ -334,6 +355,7 @@ def exchange_rate_router(
         openapi_extra={
             **_SESSION_SECURITY,
             "parameters": [
+                SESSION_BINDING_OPENAPI_PARAMETER,
                 {
                     "in": "query",
                     "name": "version_id",
@@ -372,9 +394,9 @@ def exchange_rate_router(
             ) from exc
         validate_period(start, end)
 
-        async def execute(raw_session: str) -> ConvertedPeriodValuation:
+        async def execute(credentials: SessionCredentials) -> ConvertedPeriodValuation:
             return await service.converted_period(
-                raw_session,
+                credentials,
                 version_id,
                 start,
                 end,

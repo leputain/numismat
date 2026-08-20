@@ -24,6 +24,10 @@
   сервисом. Он переиспользует bounded finance/catalog query use cases, фиксирует configured owner внутри процесса и
   выполняет каждый tool в `READ ONLY REPEATABLE READ` UoW. Production MCP получает отдельный SELECT-only DB role;
   mutation tools, arbitrary SQL, owner/tool credentials и protocol/result logging запрещены.
+- Telegram/HTTP доступ расширяется не открытой регистрацией, а полным bounded `TELEGRAM_ALLOWED_USER_IDS` максимум
+  из 32 numeric ID. Пустая переменная сохраняет singleton `OWNER_TELEGRAM_USER_ID`; primary обязан входить в явный
+  список и остаётся process-fixed MCP/rollback principal, но не получает прав читать чужие ledgers. Каждый разрешённый
+  subject является отдельным tenant; shared household, cross-user transfers и RBAC сознательно не входят в scope.
 - OCR реализован application use case `ProcessOcrImage`, отдельным port и локальным Tesseract 5 adapter (`rus+eng`).
   Telegram image router получает bounded bytes, после idempotency claim controller передаёт их в use case. Pillow
   проверяет и нормализует недоверенное JPEG/PNG/WebP в памяти; Tesseract получает PNG через stdin с timeout.
@@ -65,6 +69,9 @@
 - Telegram mutation controllers используют одну внешнюю SQLAlchemy transaction через `TelegramMutationExecutor`:
   update claim, owner lock, application mutation, audit/draft changes и response outbox либо фиксируются вместе,
   либо полностью откатываются. Telegram network I/O не выполняется внутри этой транзакции.
+- Перед любым Telegram network I/O outbox delivery проверяет, что связанный draft принадлежит записанному owner и
+  его immutable private chat. Mismatch fail closed останавливает отправку до Telegram API и не ставит `sent_at`;
+  presentation binder повторяет owner/chat guard. Это прикладной defense-in-depth поверх owner-scoped outbox FK.
 - HTTP ingress использует собственный idempotency contract и не переиспользует Telegram `update_id`. Alembic `0007`
   хранит только keyed digests, bounded status/result references и session expiry; repositories участвуют во внешней
   транзакции вместе с business mutation и не коммитят самостоятельно. Закрытый `HttpRevisionMutationService` не
@@ -75,15 +82,31 @@
   не изменяет и не удаляет. M2 FastAPI process существует как отдельный ASGI entry point; routes используют общий
   application API.
 - Telegram Mini App auth проверяет HMAC всего bounded raw `initData` до разбора доверенной identity, принимает только
-  configured owner и окно `auth_date` 5 минут с 30-секундным future skew. Replay key выводится из уже проверенного
-  Telegram hash, поэтому перестановка параметров и эквивалентное percent-encoding не обходят защиту; proof удерживается
-  до конца TTL + skew и не освобождается logout. Потерянный первый auth response требует заново открыть Mini App.
+  allowlisted subject и окно `auth_date` 5 минут с 30-секундным future skew. Frontend предъявляет signed `initData`
+  при каждом launch до доверия к cookie и очищает protected query state перед rebinding. Активная same-subject session
+  может быть сохранена без повторного consume proof; stale cross-subject cookie отзывается только после fresh proof
+  claim. Replay key выводится из уже проверенного Telegram hash, поэтому перестановка параметров и эквивалентное
+  percent-encoding не обходят защиту; иной replay удерживается до конца TTL + skew и не освобождается logout.
 - Session и CSRF — независимые 256-bit opaque tokens. В БД попадают только domain-separated keyed digests; cookie
   host-only, Secure и SameSite=Strict, session cookie дополнительно HttpOnly. Logout и protected mutation endpoints
-  авторизуются session + double-submit CSRF; один bounded ASCII Origin принимается как optional transport metadata,
+  авторизуются session + page binding + double-submit CSRF; один bounded ASCII Origin принимается как optional transport metadata,
   потому что native Telegram WebViews не гарантируют portable Origin. Duplicate, empty, oversized и non-ASCII Origin
-  fail closed. Shared session lock живёт в той же transaction, что mutation; logout использует exclusive lock, а
-  cookies формируются только после успешного commit.
+  fail closed, но само значение Origin не предоставляет authority. Каждая session read/write/logout повторно
+  проверяет membership сохранённого Telegram subject в process-local allowlist, поэтому отзыв ID действует и на
+  незавершившиеся cookies после restart API. Shared session lock живёт в той же transaction, что mutation; logout
+  использует exclusive lock. `Set-Cookie` формируется только после commit нового successful login; retained
+  same-subject auth не вращает cookies. Failed auth, любой protected error и successful logout никогда не удаляют
+  ambient cookies. Logout отзывает session server-side и отвечает `204` без `Set-Cookie`; frontend очищает binding/UI,
+  а невалидная cookie безопасно перезаписывается следующим successful signed login.
+- Cookie jar нативного WebView является общей transport-механикой, а не достаточной page/tenant binding. Каждый
+  успешный auth response возвращает `X-Session-Binding = HMAC(key, domain || raw_session_token)` без tenant ID;
+  страница хранит значение только в памяти и предъявляет его вместе с cookie на каждом protected GET/write/logout.
+  Backend пересчитывает binding до owner lookup; mutation всё ещё требует отдельный double-submit CSRF. Если страница
+  A отправляет свой binding после того, как общая cookie уже заменена сессией B, ответ — `401` без очистки cookies B.
+  Монотонная auth-attempt epoch, synchronous protected-view/query-client teardown при `hidden`/любом `pagehide` и
+  state-sensitive binding invalidation не позволяют позднему async result или cached DOM восстановить tenant. Resume
+  уже authenticated страницы делает только `/auth/me` с сохранённой в памяти парой cookie+binding и никогда не
+  повторяет stale `initData`; suspend во время in-flight auth очищает binding и требует reopen.
 - HTTP finance read model не дублирует доменную модель: FastAPI schemas отображают shared query DTO, а SQL adapters
   исполняют auth и составной read в одной `READ ONLY REPEATABLE READ` transaction. Minor units сериализуются decimal
   strings из-за ограничений JavaScript Number; валюты, категории, recent/report rows и page size fail-closed bounded.
@@ -97,9 +120,10 @@
 - FastAPI `app.openapi()` — единственный backend contract source. Offline exporter собирает полный injected surface
   без runtime settings/БД, проверяет local JSON Pointers и атомарно записывает canonical JSON; generated clients не
   должны поддерживать параллельные hand-written DTO.
-- Mini App запускается только через per-chat `MenuButtonWebApp` exact configured owner. Default menu принудительно
-  остаётся commands, а обнаруженный `getMe.has_main_web_app` останавливает bot startup: глобальный BotFather Main Mini
-  App несовместим с single-owner boundary. Отсутствующий private chat повторно конфигурируется после `/start`/`/menu`.
+- Mini App запускается только через per-chat `MenuButtonWebApp` каждого allowlisted principal после committed
+  onboarding `/start`/`/menu`. Default menu принудительно остаётся commands, а обнаруженный
+  `getMe.has_main_web_app` останавливает bot startup: глобальный BotFather Main Mini App несовместим с закрытым
+  allowlist boundary. Отсутствующий private chat не ломает startup и повторно конфигурируется при следующей команде.
 - Production web edge — отдельный pinned multi-stage image: один canonical HTTPS Host, same-origin `/api/*`, immutable
   hashed assets и extensionless BrowserRouter fallback. API состоит только в `data + api-edge`; публичная network
   принадлежит web, поэтому reverse proxy не превращает API container в egress/public boundary.
@@ -109,7 +133,13 @@
   draft staging — две independently committed bounded фазы с разными transaction advisory locks; owner lock всегда
   предшествует schedule/instance/draft. Runner создаёт только обычный review draft, а существующий active draft
   оставляет due instance pending с backoff. Timezone schedule неизменяем, DST gap/fold и monthly clamp определены
-  доменом; `(schedule_id, occurrence_index)` и transaction provenance уникальны на уровне PostgreSQL.
+  доменом; `(schedule_id, occurrence_index)` и transaction provenance уникальны на уровне PostgreSQL. Materialization
+  выбирает максимум одну due-схему на owner за tick для tenant fairness. Runner не читает Telegram allowlist, поэтому
+  offboarding требует предварительно pause-нуть schedules или остановить runner.
+- Alembic `0012_multitenant_integrity` fail closed проверяет legacy данные и вводит private actor/chat constraint плюс
+  composite owner foreign keys для default account, category parent, audit transaction, recurring/import draft и
+  Telegram outbox. RLS отложен: безопасное введение требует отдельных DB roles/context contracts для pre-auth,
+  cleanup, recurring, outbox и MCP, а не механического включения policy поверх общего runtime role.
 - Exchange rates моделируются как owner-scoped manual source и append-only version/entries. Значение хранится
   integer `coefficient + scale`, конвертация агрегата использует integer HALF_EVEN. Отчёт обязан получить явный UUID
   версии; latest lookup, inverse и triangulation сознательно запрещены, чтобы результат оставался воспроизводимым и

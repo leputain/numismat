@@ -187,6 +187,11 @@ async def test_http_finance_is_owner_scoped_keyset_bounded_and_currency_safe() -
             transport=httpx2.ASGITransport(app=app, raise_app_exceptions=False),
             base_url=ORIGIN,
             cookies={"__Host-numismat_session": session_token},
+            headers={
+                "X-Session-Binding": HttpSecurityDigester(SECURITY_KEY).session_binding(
+                    session_token
+                )
+            },
         ) as client:
             dashboard = await client.get("/api/v1/dashboard")
             first = await client.get("/api/v1/transactions?limit=2")

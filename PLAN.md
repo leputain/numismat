@@ -1,19 +1,47 @@
 # Plan
 
-Последнее обновление: 2026-08-14.
+Последнее обновление: 2026-08-20.
 
 Статус ниже описывает только состояние файлов этого checkout. Он не является заявлением о live deployment.
-Итоговый M0/M1 handoff gate выполнен на изолированных test-контейнерах, включая Docker/Compose, dependency audit и
-synthetic encrypted backup/restore. Production deployment не выполнялся.
+Итоговый baseline M0/M1 handoff gate ранее выполнен на изолированных test-контейнерах, включая Docker/Compose,
+dependency audit и synthetic encrypted backup/restore. Текущий multi-user diff ещё не прошёл consolidated gate и не
+является заявлением о завершённом production rollout.
 
 ## Стабильная основа
 
 - [x] Pinned CPython/uv/application stack и `uv.lock` находятся в проекте.
 - [x] PostgreSQL, Alembic, UUIDv7, integer minor units, timezone-aware timestamps и optimistic transaction versions.
-- [x] Owner-only middleware требует точный numeric owner ID и private chat.
+- [x] Bounded allowlist middleware требует разрешённый numeric actor, private chat и точный `actor_id == chat_id`.
 - [x] Persistent transactions, drafts, processed updates и минимальные audit events.
 - [x] Счета и категории поддерживают создание, переименование, основной счёт, soft archive и restore.
 - [x] История, карточки операций, базовые day/month reports и CSV export существуют.
+
+## Bounded multi-user access — 2026-08-20
+
+- [x] `TELEGRAM_ALLOWED_USER_IDS` задаёт полный canonical allowlist из 1..32 ID; отсутствие значения сохраняет
+  singleton `OWNER_TELEGRAM_USER_ID`, который остаётся primary/MCP/rollback principal.
+- [x] Immutable Telegram principal проходит через message/callback/outbox context; private actor/chat mismatch и
+  повторная привязка уже созданного пользователя fail closed отклоняются.
+- [x] Каждый разрешённый пользователь проходит независимый onboarding и получает собственные accounts/categories,
+  drafts, transactions, budgets, schedules, rates, imports, sessions и idempotency namespace. Shared household,
+  cross-user transfers, RBAC, self-registration и destructive offboarding не реализуются.
+- [x] Per-user Mini App menu ставится только после committed `/start`/`/menu`; default menu остаётся inert, глобальный
+  BotFather Main Mini App по-прежнему блокирует startup.
+- [x] Mini App предъявляет signed `initData` при каждом launch до доверия к cookie. API повторно проверяет allowlist
+  для session reads/writes/logout, сохраняет только active same-subject session и безопасно заменяет stale
+  cross-subject cookie после fresh proof.
+- [x] Cookie jar считается общей transport state: все 66 protected OpenAPI operations требуют page-memory
+  `X-Session-Binding`. Failed auth/protected responses и successful logout не удаляют ambient cookies; logout отзывает
+  session server-side. `hidden`/`pagehide` очищают protected UI/cache, а resume использует только `/auth/me` без replay
+  старого `initData`.
+- [x] Alembic `0012_multitenant_integrity` добавляет private chat/check и composite ownership constraints; recurring
+  materialization берёт максимум одну due-схему на owner за tick.
+- [x] Telegram outbox проверяет draft owner и immutable private chat до любого network send; presentation binding
+  повторяет guard, а mismatch не отправляется и не получает `sent_at`.
+- [x] Canonical OpenAPI и generated TypeScript contract синхронизированы: 63 paths, обязательный
+  `X-Session-Binding` на 66 SessionCookie operations и auth success response header; multi-user документация обновлена.
+- [ ] Завершить consolidated two-user PostgreSQL/frontend/static/Compose/migration gate без skips.
+- [ ] Выполнить singleton-first rollout, проверить primary owner, затем отдельно включить дополнительные ID.
 
 ## Reliability и UX — 2026-08-12
 
@@ -134,9 +162,10 @@ synthetic encrypted backup/restore. Production deployment не выполнял�
   events и раздельные live/database+Alembic readiness probes.
 - [x] Alembic `0007_http_security_state` добавляет bounded web sessions и HTTP idempotency с keyed digests,
   cleanup indexes, атомарными no-commit repositories, guarded downgrade и least-privilege runtime grants.
-- [x] Telegram Mini App auth проверяет официальный raw `initData` HMAC, bounded `auth_date` и exact owner, запрещает
+- [x] Telegram Mini App auth проверяет официальный raw `initData` HMAC, bounded `auth_date` и allowlist subject, запрещает
   повтор signed proof, выдаёт одночасовую host-only Secure cookie-session, требует session + double-submit CSRF для
-  writes и атомарно инвалидирует сессию при logout; Origin из native WebView валидируется как optional bounded metadata.
+  writes и атомарно инвалидирует сессию server-side при logout; failed responses/logout не удаляют shared cookies,
+  Origin из native WebView валидируется как optional bounded metadata.
 - [x] HTTP finance reads дают month-to-date dashboard, bounded period/comparison reports, owner-local bounded
   day/week/month timeseries, owner-scoped detail и signed keyset pagination в одной read-only repeatable transaction;
   money возвращается decimal strings.
@@ -162,7 +191,7 @@ synthetic encrypted backup/restore. Production deployment не выполнял�
 - [x] FastAPI lifespan запускает owner-safe bounded cleanup web-session/idempotency rows: advisory singleton,
   `SKIP LOCKED`, максимум 500+500 строк, 10-секундный tick и privacy-safe event/result log.
 - [x] Browser Mini App реализует mobile-first overview, currency-isolated analytics/timeseries, transaction/detail/trash
-  и общий draft review flow; bot устанавливает owner-only per-chat launch menu и fail closed запрещает глобальный
+  и общий draft review flow; bot устанавливает allowlisted per-chat launch menu и fail closed запрещает глобальный
   BotFather Main Mini App.
 - [x] Pinned non-root web edge отдаёт source-map-free SPA/immutable assets, same-origin proxy `/api/*`, TLS/CSP/cache
   headers и privacy-safe access log; API остаётся только на internal `api-edge` network.
@@ -190,9 +219,10 @@ synthetic encrypted backup/restore. Production deployment не выполнял�
   deterministic reconciliation candidates и только явные create-review/link/skip actions. HTTP raw upload,
   Telegram document ingress и Mini App review сохраняют provenance и не создают transaction без confirm;
   canonical OpenAPI содержит 63 path items. Полный PostgreSQL/cross-channel gate подтверждён Task21.
-- [x] Task21 закрыл единый release gate: backend/frontend static и unit, guarded migrations до Alembic `0011`,
+- [x] Task21 закрыл baseline release gate: backend/frontend static и unit, guarded migrations до Alembic `0011`,
   146 PostgreSQL/cross-channel integration сценариев без skips, production images, edge/TLS/privacy smoke,
-  frozen Python/npm dependency audits и encrypted Restic backup/restore drill. Production deployment не выполнялся.
+  frozen Python/npm dependency audits и encrypted Restic backup/restore drill. Этот исторический gate не покрывает
+  текущий multi-user diff и сам по себе не подтверждает его production rollout.
 
 ## Isolated tests и container operations
 

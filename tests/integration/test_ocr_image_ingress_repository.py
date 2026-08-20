@@ -80,11 +80,12 @@ def _synthetic_telegram_user_id() -> int:
 
 
 async def _create_owner(factory: async_sessionmaker[AsyncSession]) -> UUID:
+    telegram_user_id = _synthetic_telegram_user_id()
     async with factory() as session:
         owner = await ensure_owner_user(
             session,
-            telegram_user_id=_synthetic_telegram_user_id(),
-            telegram_chat_id=_synthetic_telegram_user_id(),
+            telegram_user_id=telegram_user_id,
+            telegram_chat_id=telegram_user_id,
             locale="ru",
             timezone="Europe/Moscow",
             currency="RUB",

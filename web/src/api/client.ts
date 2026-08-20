@@ -6,7 +6,7 @@ import {
   ReopenRequiredError,
   normalizeApiErrorCode,
 } from "./errors";
-import { readExactCsrfCookie } from "./cookies";
+import { isCanonicalOpaqueToken, readExactCsrfCookie } from "./cookies";
 import { createIdempotencyKey } from "./idempotency";
 import type { RandomSource } from "./idempotency";
 
@@ -202,6 +202,8 @@ export class SameOriginApiClient {
   readonly #readCookies: () => string;
   readonly #randomSource: RandomSource;
   readonly #onProtectedUnauthorized: () => void;
+  #authenticationAttempt = 0;
+  #sessionBinding: string | undefined;
 
   public constructor(dependencies: ClientDependencies = {}) {
     this.#fetch = dependencies.fetch ?? globalThis.fetch.bind(globalThis);
@@ -213,11 +215,13 @@ export class SameOriginApiClient {
 
   public async get<T>(path: string, options: GetOptions = {}): Promise<T> {
     assertApiPath(path);
+    const sessionBinding =
+      options.protected === false ? undefined : this.#requireSessionBinding();
     const attempts = options.retry === false ? 1 : 2;
     let response: Response | undefined;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
-        response = await this.#fetchGet(path, options.signal);
+        response = await this.#fetchGet(path, sessionBinding, options.signal);
         if (response.status < 500 || attempt === attempts - 1) {
           break;
         }
@@ -233,6 +237,7 @@ export class SameOriginApiClient {
     }
 
     if (response.status === 401 && options.protected !== false) {
+      this.#sessionBinding = undefined;
       this.#onProtectedUnauthorized();
     }
     return parseJsonResponse<T>(response);
@@ -240,6 +245,9 @@ export class SameOriginApiClient {
 
   public async postAuthentication<T>(path: string, body: unknown): Promise<T> {
     assertApiPath(path);
+    const attempt = this.#authenticationAttempt + 1;
+    this.#authenticationAttempt = attempt;
+    this.#sessionBinding = undefined;
     let serialized: string;
     try {
       const candidate = JSON.stringify(body);
@@ -266,7 +274,21 @@ export class SameOriginApiClient {
       await discardResponseBody(response);
       throw new NetworkError();
     }
-    return parseJsonResponse<T>(response);
+    const payload = await parseJsonResponse<T>(response);
+    const sessionBinding = response.headers.get("X-Session-Binding");
+    if (!isCanonicalOpaqueToken(sessionBinding)) {
+      throw new ProtocolError();
+    }
+    if (attempt !== this.#authenticationAttempt) {
+      throw new ReopenRequiredError();
+    }
+    this.#sessionBinding = sessionBinding;
+    return payload;
+  }
+
+  public clearProtectedSessionBinding(): void {
+    this.#authenticationAttempt += 1;
+    this.#sessionBinding = undefined;
   }
 
   public prepareMutation<TResponse>(
@@ -287,9 +309,17 @@ export class SameOriginApiClient {
       throw new ProtocolError();
     }
     const idempotencyKey = createIdempotencyKey(this.#randomSource);
+    const sessionBinding = this.#requireSessionBinding();
     return {
       execute: (signal?: AbortSignal) =>
-        this.#executeMutation<TResponse>(path, method, serialized, idempotencyKey, signal),
+        this.#executeMutation<TResponse>(
+          path,
+          method,
+          serialized,
+          idempotencyKey,
+          sessionBinding,
+          signal,
+        ),
     };
   }
 
@@ -310,14 +340,23 @@ export class SameOriginApiClient {
     copied.set(content);
     const body = new Blob([copied], { type: contentType });
     const idempotencyKey = createIdempotencyKey(this.#randomSource);
+    const sessionBinding = this.#requireSessionBinding();
     return {
       execute: (signal?: AbortSignal) =>
-        this.#executeRawMutation<TResponse>(path, body, contentType, idempotencyKey, signal),
+        this.#executeRawMutation<TResponse>(
+          path,
+          body,
+          contentType,
+          idempotencyKey,
+          sessionBinding,
+          signal,
+        ),
     };
   }
 
   public async logout(signal?: AbortSignal): Promise<void> {
     const path = "/api/v1/auth/logout";
+    const sessionBinding = this.#requireSessionBinding();
     const csrfToken = readExactCsrfCookie(this.#readCookies());
     let response: Response;
     try {
@@ -326,6 +365,7 @@ export class SameOriginApiClient {
         method: "POST",
         headers: {
           Accept: "application/json",
+          "X-Session-Binding": sessionBinding,
           "X-CSRF-Token": csrfToken,
         },
         ...(signal === undefined ? {} : { signal }),
@@ -337,16 +377,26 @@ export class SameOriginApiClient {
       throw new ProtocolError();
     }
     if (response.status === 204) {
+      this.clearProtectedSessionBinding();
       return;
     }
     await parseJsonResponse<never>(response);
   }
 
-  async #fetchGet(path: string, signal?: AbortSignal): Promise<Response> {
+  async #fetchGet(
+    path: string,
+    sessionBinding: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     return this.#fetch(path, {
       ...BASE_REQUEST,
       method: "GET",
-      headers: { Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+        ...(sessionBinding === undefined
+          ? {}
+          : { "X-Session-Binding": sessionBinding }),
+      },
       ...(signal === undefined ? {} : { signal }),
     });
   }
@@ -356,6 +406,7 @@ export class SameOriginApiClient {
     method: MutationMethod,
     serializedBody: string,
     idempotencyKey: string,
+    sessionBinding: string,
     signal?: AbortSignal,
   ): Promise<TResponse> {
     const originalCsrf = readExactCsrfCookie(this.#readCookies());
@@ -366,6 +417,7 @@ export class SameOriginApiClient {
         serializedBody,
         idempotencyKey,
         originalCsrf,
+        sessionBinding,
         signal,
       );
     } catch (error) {
@@ -388,6 +440,7 @@ export class SameOriginApiClient {
           serializedBody,
           idempotencyKey,
           refreshedCsrf,
+          sessionBinding,
           signal,
         );
       } catch (retryError) {
@@ -404,6 +457,7 @@ export class SameOriginApiClient {
     body: Blob,
     contentType: RawMutationContentType,
     idempotencyKey: string,
+    sessionBinding: string,
     signal?: AbortSignal,
   ): Promise<TResponse> {
     const originalCsrf = readExactCsrfCookie(this.#readCookies());
@@ -414,6 +468,7 @@ export class SameOriginApiClient {
         contentType,
         idempotencyKey,
         originalCsrf,
+        sessionBinding,
         signal,
       );
     } catch (error) {
@@ -436,6 +491,7 @@ export class SameOriginApiClient {
           contentType,
           idempotencyKey,
           refreshedCsrf,
+          sessionBinding,
           signal,
         );
       } catch (retryError) {
@@ -448,8 +504,17 @@ export class SameOriginApiClient {
   }
 
   #requireReopen(): never {
+    this.clearProtectedSessionBinding();
     this.#onProtectedUnauthorized();
     throw new ReopenRequiredError();
+  }
+
+  #requireSessionBinding(): string {
+    const value = this.#sessionBinding;
+    if (!isCanonicalOpaqueToken(value)) {
+      this.#requireReopen();
+    }
+    return value;
   }
 
   async #sendMutation<TResponse>(
@@ -458,6 +523,7 @@ export class SameOriginApiClient {
     serializedBody: string,
     idempotencyKey: string,
     csrfToken: string,
+    sessionBinding: string,
     signal?: AbortSignal,
   ): Promise<TResponse> {
     let response: Response;
@@ -468,6 +534,7 @@ export class SameOriginApiClient {
         headers: {
           ...JSON_HEADERS,
           "Idempotency-Key": idempotencyKey,
+          "X-Session-Binding": sessionBinding,
           "X-CSRF-Token": csrfToken,
         },
         body: serializedBody,
@@ -481,6 +548,7 @@ export class SameOriginApiClient {
       throw new MutationResultUnknownError();
     }
     if (response.status === 401) {
+      this.clearProtectedSessionBinding();
       this.#onProtectedUnauthorized();
     }
     if (response.status === 204) {
@@ -495,6 +563,7 @@ export class SameOriginApiClient {
     contentType: RawMutationContentType,
     idempotencyKey: string,
     csrfToken: string,
+    sessionBinding: string,
     signal?: AbortSignal,
   ): Promise<TResponse> {
     let response: Response;
@@ -506,6 +575,7 @@ export class SameOriginApiClient {
           Accept: "application/json",
           "Content-Type": contentType,
           "Idempotency-Key": idempotencyKey,
+          "X-Session-Binding": sessionBinding,
           "X-CSRF-Token": csrfToken,
         },
         body,
@@ -519,6 +589,7 @@ export class SameOriginApiClient {
       throw new MutationResultUnknownError();
     }
     if (response.status === 401) {
+      this.clearProtectedSessionBinding();
       this.#onProtectedUnauthorized();
     }
     return parseJsonResponse<TResponse>(response);

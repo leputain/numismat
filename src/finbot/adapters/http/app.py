@@ -151,8 +151,11 @@ def create_app(
 
     app = FastAPI(
         title="Numismat API",
-        summary="Private owner-only finance API",
-        description="Versioned HTTP adapter over the shared Numismat application contracts.",
+        summary="Private finance API for isolated allowlisted users",
+        description=(
+            "Versioned HTTP adapter for a bounded operator-managed allowlist of "
+            "independent Numismat ledgers."
+        ),
         version=__version__,
         openapi_url="/api/v1/openapi.json",
         docs_url=None,
@@ -282,9 +285,11 @@ def create_runtime_app(*, settings: Settings | None = None) -> FastAPI:
         raise RuntimeError("HTTP auth security configuration is required")
     sessions = session_factory(runtime_settings)
     digester = HttpSecurityDigester(runtime_settings.http_security_key)
+    allowed_telegram_user_ids = runtime_settings.effective_telegram_user_ids
     mutation_executor = HttpMutationExecutor(
         digester=digester,
         uow_factory=SqlAlchemyHttpMutationUnitOfWorkFactory(sessions),
+        allowed_telegram_user_ids=allowed_telegram_user_ids,
     )
     return create_app(
         readiness_probe=SqlAlchemyReadinessProbe(
@@ -293,7 +298,7 @@ def create_runtime_app(*, settings: Settings | None = None) -> FastAPI:
         ),
         auth_service=TelegramAuthService(
             bot_token=runtime_settings.telegram_bot_token,
-            owner_telegram_user_id=runtime_settings.owner_telegram_user_id,
+            allowed_telegram_user_ids=allowed_telegram_user_ids,
             digester=digester,
             uow_factory=SqlAlchemyAuthUnitOfWorkFactory(sessions),
         ),
@@ -302,11 +307,13 @@ def create_runtime_app(*, settings: Settings | None = None) -> FastAPI:
             digester=digester,
             cursor_codec=TransactionCursorCodec(runtime_settings.http_security_key),
             uow_factory=SqlAlchemyFinanceQueryUnitOfWorkFactory(sessions),
+            allowed_telegram_user_ids=allowed_telegram_user_ids,
         ),
         catalog_service=HttpCatalogService(
             digester=digester,
             query_uow_factory=SqlAlchemyCatalogQueryUnitOfWorkFactory(sessions),
             mutation_executor=mutation_executor,
+            allowed_telegram_user_ids=allowed_telegram_user_ids,
         ),
         catalog_origin=runtime_settings.miniapp_origin,
         budget_service=HttpBudgetService(
@@ -314,6 +321,7 @@ def create_runtime_app(*, settings: Settings | None = None) -> FastAPI:
             cursor_codec=BudgetCursorCodec(runtime_settings.http_security_key),
             query_uow_factory=SqlAlchemyBudgetQueryUnitOfWorkFactory(sessions),
             mutation_executor=mutation_executor,
+            allowed_telegram_user_ids=allowed_telegram_user_ids,
         ),
         budget_origin=runtime_settings.miniapp_origin,
         recurring_service=HttpRecurringService(
@@ -321,6 +329,7 @@ def create_runtime_app(*, settings: Settings | None = None) -> FastAPI:
             cursor_codec=RecurringCursorCodec(runtime_settings.http_security_key),
             query_uow_factory=SqlAlchemyRecurringQueryUnitOfWorkFactory(sessions),
             mutation_executor=mutation_executor,
+            allowed_telegram_user_ids=allowed_telegram_user_ids,
         ),
         recurring_origin=runtime_settings.miniapp_origin,
         exchange_rate_service=HttpExchangeRateService(
@@ -328,6 +337,7 @@ def create_runtime_app(*, settings: Settings | None = None) -> FastAPI:
             cursor_codec=ExchangeRateCursorCodec(runtime_settings.http_security_key),
             query_uow_factory=SqlAlchemyExchangeRateQueryUnitOfWorkFactory(sessions),
             mutation_executor=mutation_executor,
+            allowed_telegram_user_ids=allowed_telegram_user_ids,
         ),
         exchange_rate_origin=runtime_settings.miniapp_origin,
         bank_import_service=HttpBankImportService(
@@ -340,6 +350,7 @@ def create_runtime_app(*, settings: Settings | None = None) -> FastAPI:
             admission_uow_factory=SqlAlchemyAuthUnitOfWorkFactory(sessions),
             query_uow_factory=SqlAlchemyBankImportQueryUnitOfWorkFactory(sessions),
             mutation_executor=mutation_executor,
+            allowed_telegram_user_ids=allowed_telegram_user_ids,
         ),
         bank_import_origin=runtime_settings.miniapp_origin,
         mutation_service=HttpRevisionMutationService(mutation_executor),

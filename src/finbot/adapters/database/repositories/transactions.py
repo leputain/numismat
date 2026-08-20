@@ -333,6 +333,7 @@ class SqlAlchemyTransactionCommandRepository:
         except UnknownAccountError, UnknownCategoryError:
             raise CatalogUnavailableError("Счёт или категория недоступны") from None
         if recurring_instance is not None:
+            recurring_instance.draft_id = None
             recurring_instance.version = _next_recurring_version(recurring_instance.version)
             recurring_instance.updated_at = datetime.now(UTC)
         if import_row is not None and import_batch is not None:

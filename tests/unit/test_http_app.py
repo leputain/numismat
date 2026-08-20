@@ -51,12 +51,15 @@ async def test_http_skeleton_exposes_versioned_metadata_and_health() -> None:
     assert readiness.calls == 1
     assert schema.status_code == 200
     assert schema.json()["info"] == {
-        "description": ("Versioned HTTP adapter over the shared Numismat application contracts."),
+        "description": (
+            "Versioned HTTP adapter for a bounded operator-managed allowlist of "
+            "independent Numismat ledgers."
+        ),
         "license": {
             "name": "Apache License 2.0",
             "identifier": "Apache-2.0",
         },
-        "summary": "Private owner-only finance API",
+        "summary": "Private finance API for isolated allowlisted users",
         "title": "Numismat API",
         "version": "0.45.0",
     }

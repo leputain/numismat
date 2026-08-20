@@ -25,6 +25,7 @@ class AuthOwner:
     locale: str
     timezone: str
     base_currency: str
+    telegram_user_id: int = field(default=0, repr=False)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -87,6 +88,20 @@ class AuthPersistence(Protocol):
         *,
         now: datetime,
     ) -> SessionCheck: ...
+
+    async def lock_session_for_login(
+        self,
+        session_token: SessionTokenDigest,
+        *,
+        now: datetime,
+    ) -> SessionCheck: ...
+
+    async def revoke_session_for_login(
+        self,
+        session_token: SessionTokenDigest,
+        *,
+        now: datetime,
+    ) -> None: ...
 
     async def lock_session_for_mutation(
         self,

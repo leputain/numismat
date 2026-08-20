@@ -35,6 +35,7 @@ from finbot.observability.logging import JsonFormatter
 NOW = datetime(2026, 8, 13, 12, tzinfo=UTC)
 SECURITY_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 SESSION_TOKEN = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+SESSION_BINDING = HttpSecurityDigester(SECURITY_KEY).session_binding(SESSION_TOKEN)
 BASE_URL = "https://miniapp.example.test"
 
 
@@ -165,6 +166,7 @@ def _client(app: FastAPI) -> httpx2.AsyncClient:
         transport=httpx2.ASGITransport(app=app, raise_app_exceptions=False),
         base_url=BASE_URL,
         cookies={"__Host-numismat_session": SESSION_TOKEN},
+        headers={"X-Session-Binding": SESSION_BINDING},
     )
 
 
@@ -278,9 +280,7 @@ async def test_timeseries_is_owner_local_dense_and_excludes_deleted_details() ->
         amount_minor=999,
         deleted_at=NOW,
     )
-    app, factory, _owner_id = _app(
-        (first_expense, first_income, second_currency, deleted)
-    )
+    app, factory, _owner_id = _app((first_expense, first_income, second_currency, deleted))
 
     async with _client(app) as client:
         response = await client.get(
@@ -396,8 +396,7 @@ async def test_period_and_comparison_enforce_bounded_canonical_contract() -> Non
 async def test_timeseries_rejects_noncanonical_or_unbounded_query_before_database() -> None:
     app, factory, _owner_id = _app(())
     cases = (
-        "/api/v1/reports/timeseries"
-        "?start=2026-08-01T00%3A00%3A00Z&end=2026-08-02T00%3A00%3A00Z",
+        "/api/v1/reports/timeseries?start=2026-08-01T00%3A00%3A00Z&end=2026-08-02T00%3A00%3A00Z",
         "/api/v1/reports/timeseries"
         "?start=2026-08-01T00%3A00%3A00Z&end=2026-08-02T00%3A00%3A00Z&grain=hour",
         "/api/v1/reports/timeseries"
@@ -507,7 +506,7 @@ async def test_query_ambiguity_invalid_cursor_and_uuid_have_fixed_errors() -> No
 
 
 @pytest.mark.asyncio
-async def test_invalid_session_clears_both_cookies_before_finance_query() -> None:
+async def test_invalid_session_preserves_ambient_cookies_before_finance_query() -> None:
     app, factory, _owner_id = _app((), authenticated=False)
 
     async with _client(app) as client:
@@ -515,9 +514,7 @@ async def test_invalid_session_clears_both_cookies_before_finance_query() -> Non
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "auth_session_invalid"
-    cookies = response.headers.get_list("set-cookie")
-    assert len(cookies) == 2
-    assert all("Max-Age=0" in value and "Secure" in value for value in cookies)
+    assert response.headers.get_list("set-cookie") == []
     assert factory.entries == 1
     _security_headers(response)
 
@@ -549,12 +546,19 @@ async def test_finance_openapi_is_authenticated_bounded_and_uses_string_money() 
         "/api/v1/transactions/{transaction_id}",
     ):
         assert paths[path]["get"]["security"] == [{"SessionCookie": []}]
+        assert any(
+            parameter["name"] == "X-Session-Binding"
+            and parameter["in"] == "header"
+            and parameter["required"] is True
+            for parameter in paths[path]["get"]["parameters"]
+        )
     assert schema["components"]["securitySchemes"]["SessionCookie"]["name"] == (
         "__Host-numismat_session"
     )
     money = schema["components"]["schemas"]["TransactionResponse"]["properties"]["amount_minor"]
     assert money["type"] == "string"
-    assert paths["/api/v1/transactions"]["get"]["parameters"][0]["schema"] == {
+    transaction_parameters = paths["/api/v1/transactions"]["get"]["parameters"]
+    assert next(item for item in transaction_parameters if item["name"] == "limit")["schema"] == {
         "default": 30,
         "maximum": 100,
         "minimum": 1,
@@ -578,6 +582,7 @@ async def test_finance_openapi_is_authenticated_bounded_and_uses_string_money() 
     assert page_schema["properties"]["items"]["maxItems"] == 100
     timeseries_parameters = paths["/api/v1/reports/timeseries"]["get"]["parameters"]
     assert {item["name"] for item in timeseries_parameters if item["required"]} == {
+        "X-Session-Binding",
         "start",
         "end",
         "grain",

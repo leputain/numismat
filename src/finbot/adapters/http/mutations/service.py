@@ -15,7 +15,7 @@ from finbot.adapters.database.repositories.http_idempotency import (
     IdempotencyStateError,
 )
 from finbot.adapters.http.auth.crypto import HttpSecurityDigester
-from finbot.adapters.http.auth.service import SessionAuthenticator
+from finbot.adapters.http.auth.service import SessionAuthenticator, SessionCredentials
 from finbot.adapters.http.mutations.ports import MutationUnitOfWork, MutationUnitOfWorkFactory
 from finbot.application.dto import DraftRef, DraftSnapshot
 from finbot.application.errors import EntityNotFoundError
@@ -83,6 +83,7 @@ class InvalidStoredMutationResultError(RuntimeError):
 @dataclass(frozen=True, slots=True, repr=False)
 class MutationCredentials:
     session_token: str = field(repr=False)
+    session_binding: str = field(repr=False)
     csrf_cookie: str = field(repr=False)
     csrf_header: str = field(repr=False)
     idempotency_key: str = field(repr=False)
@@ -156,10 +157,11 @@ class HttpMutationExecutor:
         *,
         digester: HttpSecurityDigester,
         uow_factory: MutationUnitOfWorkFactory,
+        allowed_telegram_user_ids: frozenset[int] | None = None,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         self._digester = digester
-        self._authenticator = SessionAuthenticator(digester)
+        self._authenticator = SessionAuthenticator(digester, allowed_telegram_user_ids)
         self._uow_factory = uow_factory
         self._clock = clock
 
@@ -187,6 +189,7 @@ class HttpMutationExecutor:
             authenticated = await self._authenticator.authenticate_mutation(
                 uow.auth,
                 credentials.session_token,
+                credentials.session_binding,
                 credentials.csrf_cookie,
                 credentials.csrf_header,
                 now=now,
@@ -246,18 +249,18 @@ class HttpMutationExecutor:
                 raise InvalidStoredMutationResultError from exc
         return receipt
 
-    async def active_draft(self, raw_session_token: str) -> DraftSnapshot | None:
+    async def active_draft(self, credentials: SessionCredentials) -> DraftSnapshot | None:
         now = self._now()
         async with self._uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             return await uow.drafts.get_active(authenticated.owner.owner_id)
 
-    async def draft(self, raw_session_token: str, draft_id: UUID) -> DraftSnapshot:
-        current = await self.active_draft(raw_session_token)
+    async def draft(self, credentials: SessionCredentials, draft_id: UUID) -> DraftSnapshot:
+        current = await self.active_draft(credentials)
         if current is None or current.draft_id != draft_id:
             raise EntityNotFoundError("Черновик не найден")
         return current
@@ -329,11 +332,11 @@ class HttpRevisionMutationService:
     def __init__(self, executor: HttpMutationExecutor) -> None:
         self._executor = executor
 
-    async def active_draft(self, raw_session_token: str) -> DraftSnapshot | None:
-        return await self._executor.active_draft(raw_session_token)
+    async def active_draft(self, credentials: SessionCredentials) -> DraftSnapshot | None:
+        return await self._executor.active_draft(credentials)
 
-    async def draft(self, raw_session_token: str, draft_id: UUID) -> DraftSnapshot:
-        return await self._executor.draft(raw_session_token, draft_id)
+    async def draft(self, credentials: SessionCredentials, draft_id: UUID) -> DraftSnapshot:
+        return await self._executor.draft(credentials, draft_id)
 
     async def create_draft(self, credentials: MutationCredentials) -> MutationReceipt:
         async def mutate(uow: MutationUnitOfWork, owner_id: UUID) -> MutationReceipt:

@@ -74,26 +74,3 @@ def set_auth_cookies(response: Response, *, session_token: str, csrf_token: str)
         httponly=False,
         samesite="strict",
     )
-
-
-def clear_auth_cookies(response: Response) -> None:
-    response.set_cookie(
-        SESSION_COOKIE,
-        "",
-        max_age=0,
-        expires=0,
-        path="/",
-        secure=True,
-        httponly=True,
-        samesite="strict",
-    )
-    response.set_cookie(
-        CSRF_COOKIE,
-        "",
-        max_age=0,
-        expires=0,
-        path="/",
-        secure=True,
-        httponly=False,
-        samesite="strict",
-    )

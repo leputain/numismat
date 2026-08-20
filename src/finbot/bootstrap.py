@@ -256,6 +256,7 @@ from finbot.adapters.telegram.presenters import (
 from finbot.adapters.telegram.presenters import (
     wizard_summary as render_wizard_summary,
 )
+from finbot.adapters.telegram.principal import telegram_principal_for_message
 from finbot.adapters.telegram.routers import (
     CatalogCallbackRouter,
     CsvExportRequestDefaults,
@@ -442,10 +443,11 @@ def _telegram_mutation_request(
     update_id: int | None,
     message: Message,
 ) -> TelegramMutationRequest:
+    principal = telegram_principal_for_message(message)
     return TelegramMutationRequest(
         update_id=update_id,
-        owner_telegram_user_id=settings.owner_telegram_user_id,
-        chat_id=message.chat.id,
+        owner_telegram_user_id=principal.telegram_user_id,
+        chat_id=principal.chat_id,
         locale=settings.default_locale,
         timezone=settings.default_timezone,
         currency=settings.default_currency,
@@ -1135,7 +1137,6 @@ async def _deliver_untracked_settings_query_receipt(
 
 def _queue_callback_receipt(
     session: AsyncSession,
-    settings: Settings,
     update_id: int | None,
     message: Message,
     text: str,
@@ -1145,11 +1146,12 @@ def _queue_callback_receipt(
 ) -> bool:
     if update_id is None:
         return False
+    principal = telegram_principal_for_message(message)
     queue_edit_message_text(
         session,
         update_id=update_id,
-        owner_telegram_user_id=settings.owner_telegram_user_id,
-        chat_id=message.chat.id,
+        owner_telegram_user_id=principal.telegram_user_id,
+        chat_id=principal.chat_id,
         message_id=message.message_id,
         text=text,
         parse_mode="HTML",
@@ -2520,7 +2522,6 @@ async def _deliver_untracked_transaction_edit_text_input(
 
 async def _deliver_tracked_text_input_receipt(
     sessions: async_sessionmaker[AsyncSession],
-    settings: Settings,
     message: Message,
     update_id: int,
     *,
@@ -2529,12 +2530,13 @@ async def _deliver_tracked_text_input_receipt(
     bot = message.bot
     if bot is None:  # pragma: no cover - aiogram dispatch always binds the bot
         raise RuntimeError("Telegram bot is not bound to the message")
+    principal = telegram_principal_for_message(message)
     delivered = await deliver_pending_responses(
         sessions,
         bot,
         update_id=update_id,
-        owner_telegram_user_id=settings.owner_telegram_user_id,
-        chat_id=message.chat.id,
+        owner_telegram_user_id=principal.telegram_user_id,
+        chat_id=principal.chat_id,
         special_delivery=special_delivery.deliver_job,
     )
     return delivered > 0
@@ -3395,7 +3397,6 @@ def build_dispatcher(
         ),
         MainMenuDirectDelivery(sessions),
         MainMenuRequestDefaults(
-            owner_telegram_user_id=settings.owner_telegram_user_id,
             locale=settings.default_locale,
             timezone=settings.default_timezone,
             currency=settings.default_currency,
@@ -3411,7 +3412,6 @@ def build_dispatcher(
         ),
         csv_export_delivery,
         CsvExportRequestDefaults(
-            owner_telegram_user_id=settings.owner_telegram_user_id,
             locale=settings.default_locale,
             timezone=settings.default_timezone,
             currency=settings.default_currency,
@@ -3448,7 +3448,6 @@ def build_dispatcher(
         TelegramTextInputDelivery(
             tracked=lambda message, update_id: _deliver_tracked_text_input_receipt(
                 sessions,
-                settings,
                 message,
                 update_id,
                 special_delivery=csv_export_delivery,
@@ -3662,14 +3661,15 @@ async def run(settings: Settings) -> None:
     bot = Bot(settings.telegram_bot_token)
     bot.session.middleware(ReliableDeliveryMiddleware())
     miniapp_menu = MiniAppMenuConfigurator(
-        owner_telegram_user_id=settings.owner_telegram_user_id,
+        allowed_user_ids=settings.effective_telegram_user_ids,
         public_url=settings.miniapp_public_url,
     )
     dispatcher = build_dispatcher(settings, miniapp_menu=miniapp_menu)
     logger = logging.getLogger("finbot.lifecycle")
     try:
         # Keep one visible interface: the persistent reply keyboard. Slash commands
-        # still work manually; the private owner menu launches the Mini App.
+        # still work manually; a per-user private menu launches the Mini App only
+        # after that user's onboarding transaction has committed.
         await bot.delete_my_commands()
         await miniapp_menu.configure_startup(bot)
         logger.info("polling_started")

@@ -1,13 +1,22 @@
 import base64
 import binascii
 from pathlib import Path
-from typing import Self
+from typing import Annotated, Self
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from sqlalchemy.engine import make_url
+
+_MAX_TELEGRAM_USER_ID = 2**52 - 1
+_MAX_ALLOWED_TELEGRAM_USERS = 32
+_MAX_TELEGRAM_ALLOWLIST_TEXT_LENGTH = (
+    _MAX_ALLOWED_TELEGRAM_USERS * len(str(_MAX_TELEGRAM_USER_ID)) + _MAX_ALLOWED_TELEGRAM_USERS - 1
+)
+_TELEGRAM_ALLOWLIST_ERROR = (
+    "TELEGRAM_ALLOWED_USER_IDS must contain 1 to 32 unique canonical Telegram user IDs"
+)
 
 
 class Settings(BaseSettings):
@@ -25,8 +34,14 @@ class Settings(BaseSettings):
     )
     owner_telegram_user_id: int = Field(
         gt=0,
-        le=2**52 - 1,
+        le=_MAX_TELEGRAM_USER_ID,
+        repr=False,
         validation_alias="OWNER_TELEGRAM_USER_ID",
+    )
+    telegram_allowed_user_ids: Annotated[tuple[int, ...] | None, NoDecode] = Field(
+        default=None,
+        repr=False,
+        validation_alias="TELEGRAM_ALLOWED_USER_IDS",
     )
     database_url: str = Field(
         default="postgresql+psycopg://finbot:finbot@localhost:5432/finbot",
@@ -82,6 +97,41 @@ class Settings(BaseSettings):
         repr=False,
         validation_alias="LOCAL_AI_MODEL",
     )
+
+    @field_validator("telegram_allowed_user_ids", mode="before")
+    @classmethod
+    def validate_telegram_allowed_user_ids(cls, value: object) -> object:
+        if value is None:
+            return None
+        if type(value) is str:
+            if value == "":
+                return None
+            if len(value) > _MAX_TELEGRAM_ALLOWLIST_TEXT_LENGTH:
+                raise ValueError(_TELEGRAM_ALLOWLIST_ERROR)
+            components = value.split(",")
+            if any(
+                not component
+                or not component.isascii()
+                or not component.isdecimal()
+                or (len(component) > 1 and component.startswith("0"))
+                for component in components
+            ):
+                raise ValueError(_TELEGRAM_ALLOWLIST_ERROR)
+            user_ids = tuple(int(component) for component in components)
+        elif isinstance(value, (list, tuple)):
+            if any(type(user_id) is not int for user_id in value):
+                raise ValueError(_TELEGRAM_ALLOWLIST_ERROR)
+            user_ids = tuple(value)
+        else:
+            raise ValueError(_TELEGRAM_ALLOWLIST_ERROR)
+
+        if (
+            not 1 <= len(user_ids) <= _MAX_ALLOWED_TELEGRAM_USERS
+            or any(not 1 <= user_id <= _MAX_TELEGRAM_USER_ID for user_id in user_ids)
+            or len(set(user_ids)) != len(user_ids)
+        ):
+            raise ValueError(_TELEGRAM_ALLOWLIST_ERROR)
+        return user_ids
 
     @field_validator("database_url")
     @classmethod
@@ -222,6 +272,15 @@ class Settings(BaseSettings):
             raise ValueError("HTTP_SECURITY_KEY and BANK_IMPORT_SECURITY_KEY must be independent")
         return self
 
+    @model_validator(mode="after")
+    def require_primary_owner_in_telegram_allowlist(self) -> Self:
+        if (
+            self.telegram_allowed_user_ids is not None
+            and self.owner_telegram_user_id not in self.telegram_allowed_user_ids
+        ):
+            raise ValueError("TELEGRAM_ALLOWED_USER_IDS must include OWNER_TELEGRAM_USER_ID")
+        return self
+
     @property
     def miniapp_origin(self) -> str | None:
         if self.miniapp_public_url is None:
@@ -238,6 +297,13 @@ class Settings(BaseSettings):
         if self.bank_import_security_key is None:
             return None
         return base64.urlsafe_b64decode(self.bank_import_security_key + "=")
+
+    @property
+    def effective_telegram_user_ids(self) -> frozenset[int]:
+        configured = self.telegram_allowed_user_ids
+        if configured is None:
+            return frozenset((self.owner_telegram_user_id,))
+        return frozenset(configured)
 
     @classmethod
     def from_secret_or_env(cls) -> Settings:

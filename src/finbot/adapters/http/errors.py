@@ -90,12 +90,10 @@ class HttpApiError(Exception):
         *,
         status_code: int,
         code: HttpErrorCode,
-        clear_auth_cookies: bool = False,
     ) -> None:
         super().__init__(code.value)
         self.status_code = status_code
         self.code = code
-        self.clear_auth_cookies = clear_auth_cookies
 
 
 def _safe_details(error: ApplicationError) -> dict[str, int]:
@@ -124,17 +122,12 @@ def _response(
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(HttpApiError)
     async def handle_http_api_error(request: Request, error: HttpApiError) -> JSONResponse:
-        response = _response(
+        return _response(
             request,
             status_code=error.status_code,
             code=error.code.value,
             message=_HTTP_SAFE_MESSAGES[error.code],
         )
-        if error.clear_auth_cookies:
-            from finbot.adapters.http.auth.cookies import clear_auth_cookies
-
-            clear_auth_cookies(response)
-        return response
 
     @app.exception_handler(ApplicationError)
     async def handle_application_error(request: Request, error: ApplicationError) -> JSONResponse:

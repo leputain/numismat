@@ -11,6 +11,7 @@ from finbot.adapters.database.models import (
     Draft,
     TelegramDraftPresentation,
     TelegramResponseOutbox,
+    User,
 )
 from finbot.application.interactions import MAX_PAGE
 
@@ -206,7 +207,12 @@ async def bind_telegram_draft_presentation(
 
     current_draft_id = await session.scalar(
         select(Draft.id)
+        .join(User, User.id == Draft.user_id)
         .where(Draft.id == draft_id, Draft.revision == draft_revision)
+        .where(
+            User.telegram_user_id == chat_id,
+            User.telegram_chat_id == chat_id,
+        )
         .with_for_update()
     )
     if current_draft_id is None:
@@ -234,6 +240,32 @@ async def bind_telegram_draft_presentation(
     )
     bound_draft_id = await session.scalar(statement.returning(TelegramDraftPresentation.draft_id))
     return bound_draft_id is not None
+
+
+async def response_draft_belongs_to_private_chat(
+    session: AsyncSession,
+    response: TelegramResponseOutbox,
+) -> bool:
+    """Fail closed before delivery if an outbox draft belongs to another tenant."""
+    if response.draft_id is None:
+        # A tracked draft FK uses ON DELETE SET NULL while its snapshot metadata
+        # remains intact. Treat that shape as an invalidated draft response, not
+        # as an ordinary draft-free receipt.
+        return (
+            response.draft_revision is None
+            and response.history_page is None
+            and response.pending_history_page is None
+        )
+    owned_draft_id = await session.scalar(
+        select(Draft.id)
+        .join(User, User.id == Draft.user_id)
+        .where(
+            Draft.id == response.draft_id,
+            User.telegram_user_id == response.owner_telegram_user_id,
+            User.telegram_chat_id == response.chat_id,
+        )
+    )
+    return owned_draft_id is not None
 
 
 async def lock_pending_responses(

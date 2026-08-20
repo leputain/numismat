@@ -16,7 +16,7 @@ from fastapi import FastAPI
 import finbot.adapters.http.app as http_app_module
 from finbot.adapters.database.repositories.http_idempotency import IdempotencyResultKind
 from finbot.adapters.http.app import create_app
-from finbot.adapters.http.auth.service import TelegramAuthService
+from finbot.adapters.http.auth.service import SessionCredentials, TelegramAuthService
 from finbot.adapters.http.catalogs.service import AccountCatalog, HttpCatalogService
 from finbot.adapters.http.mutations.service import (
     HttpRevisionMutationService,
@@ -37,12 +37,14 @@ from finbot.observability.logging import JsonFormatter
 ORIGIN = "https://miniapp.example.test"
 NOW = datetime(2026, 8, 14, 7, 0, tzinfo=UTC)
 SESSION_TOKEN = base64.urlsafe_b64encode(b"s" * 32).rstrip(b"=").decode("ascii")
+SESSION_BINDING = base64.urlsafe_b64encode(b"b" * 32).rstrip(b"=").decode("ascii")
 CSRF_TOKEN = base64.urlsafe_b64encode(b"c" * 32).rstrip(b"=").decode("ascii")
 IDEMPOTENCY_KEY = base64.urlsafe_b64encode(b"i" * 32).rstrip(b"=").decode("ascii")
 SECURITY_KEY = base64.urlsafe_b64encode(b"k" * 32).rstrip(b"=").decode("ascii")
 OWNER_ID = UUID("018f0000-0000-7000-8000-000000000001")
 ACCOUNT_ID = UUID("018f0000-0000-7000-8000-000000000002")
 CATEGORY_ID = UUID("018f0000-0000-7000-8000-000000000003")
+READ_CREDENTIALS = SessionCredentials(SESSION_TOKEN, SESSION_BINDING)
 
 
 class ReadinessStub:
@@ -83,19 +85,19 @@ class FakeCatalogService:
             self.error = None
             raise error
 
-    async def accounts(self, raw_session: str, *, archived: bool) -> AccountCatalog:
-        self.calls.append(("accounts", (raw_session, archived)))
+    async def accounts(self, credentials: SessionCredentials, *, archived: bool) -> AccountCatalog:
+        self.calls.append(("accounts", (credentials, archived)))
         self._raise_once()
         return AccountCatalog(ACCOUNT_ID, (_account(archived=archived),))
 
     async def categories(
         self,
-        raw_session: str,
+        credentials: SessionCredentials,
         *,
         kind: TransactionType | None,
         archived: bool,
     ) -> tuple[CategorySnapshot, ...]:
-        self.calls.append(("categories", (raw_session, kind, archived)))
+        self.calls.append(("categories", (credentials, kind, archived)))
         self._raise_once()
         return (_category(archived=archived),)
 
@@ -223,6 +225,15 @@ def _headers() -> dict[str, str]:
         "Idempotency-Key": IDEMPOTENCY_KEY,
         "Origin": ORIGIN,
         "X-CSRF-Token": CSRF_TOKEN,
+        "X-Session-Binding": SESSION_BINDING,
+    }
+
+
+def _read_headers() -> dict[str, str]:
+    headers = _headers()
+    return {
+        "Cookie": headers["Cookie"],
+        "X-Session-Binding": headers["X-Session-Binding"],
     }
 
 
@@ -262,11 +273,11 @@ async def test_catalog_reads_are_owner_scoped_bounded_projections() -> None:
     async with _client(_app(service)) as client:
         accounts = await client.get(
             "/api/v1/accounts?archived=true",
-            headers={"Cookie": _headers()["Cookie"]},
+            headers=_read_headers(),
         )
         categories = await client.get(
             "/api/v1/categories?kind=expense&archived=false",
-            headers={"Cookie": _headers()["Cookie"]},
+            headers=_read_headers(),
         )
 
     assert accounts.status_code == categories.status_code == 200
@@ -292,8 +303,8 @@ async def test_catalog_reads_are_owner_scoped_bounded_projections() -> None:
         "version": 5,
     }
     assert service.calls == [
-        ("accounts", (SESSION_TOKEN, True)),
-        ("categories", (SESSION_TOKEN, TransactionType.EXPENSE, False)),
+        ("accounts", (READ_CREDENTIALS, True)),
+        ("categories", (READ_CREDENTIALS, TransactionType.EXPENSE, False)),
     ]
 
 
@@ -313,7 +324,7 @@ async def test_account_query_rejects_noncanonical_duplicate_and_unknown_fields(q
     async with _client(_app(service)) as client:
         response = await client.get(
             f"/api/v1/accounts?{query}",
-            headers={"Cookie": _headers()["Cookie"]},
+            headers=_read_headers(),
         )
     assert response.status_code == 422
     assert service.calls == []
@@ -326,7 +337,7 @@ async def test_category_query_rejects_invalid_or_duplicate_kind(query: str) -> N
     async with _client(_app(service)) as client:
         response = await client.get(
             f"/api/v1/categories?{query}",
-            headers={"Cookie": _headers()["Cookie"]},
+            headers=_read_headers(),
         )
     assert response.status_code == 422
     assert service.calls == []
@@ -556,6 +567,7 @@ async def test_catalog_openapi_is_closed_exact_and_resolvable() -> None:
             assert {item["name"] for item in header_parameters} == {
                 "Origin",
                 "X-CSRF-Token",
+                "X-Session-Binding",
                 "Idempotency-Key",
             }
             for item in header_parameters:

@@ -5,7 +5,15 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Path, Request
 
-from finbot.adapters.http.auth.service import SessionInvalidError
+from finbot.adapters.http.auth.request import (
+    SESSION_BINDING_OPENAPI_PARAMETER,
+    session_credentials,
+)
+from finbot.adapters.http.auth.service import (
+    SessionBindingMismatchError,
+    SessionCredentials,
+    SessionInvalidError,
+)
 from finbot.adapters.http.errors import HttpApiError, HttpErrorCode
 from finbot.adapters.http.finance.cursor import InvalidTransactionCursorError
 from finbot.adapters.http.finance.request import (
@@ -15,7 +23,6 @@ from finbot.adapters.http.finance.request import (
     bounded_limit,
     canonical_cursor,
     canonical_uuid,
-    session_token,
     strict_query,
     timeseries_grain,
     utc_timestamp,
@@ -44,7 +51,10 @@ from finbot.application.dto import (
     TransactionSnapshot,
 )
 
-_SESSION_SECURITY: dict[str, Any] = {"security": [{"SessionCookie": []}]}
+_SESSION_SECURITY: dict[str, Any] = {
+    "security": [{"SessionCookie": []}],
+    "parameters": [SESSION_BINDING_OPENAPI_PARAMETER],
+}
 _PERIOD_QUERY = frozenset({"start", "end", "category_limit", "transaction_limit"})
 _COMPARE_QUERY = frozenset({"current_start", "current_end", "previous_start", "previous_end"})
 _TIMESERIES_QUERY = frozenset({"start", "end", "grain"})
@@ -84,15 +94,19 @@ def _limit_parameter(name: str, default: int) -> dict[str, Any]:
 
 async def _safe_session_call[ResultT](
     request: Request,
-    operation: Callable[[str], Awaitable[ResultT]],
+    operation: Callable[[SessionCredentials], Awaitable[ResultT]],
 ) -> ResultT:
     try:
-        return await operation(session_token(request))
+        return await operation(session_credentials(request))
+    except SessionBindingMismatchError as exc:
+        raise HttpApiError(
+            status_code=401,
+            code=HttpErrorCode.AUTH_SESSION_INVALID,
+        ) from exc
     except SessionInvalidError as exc:
         raise HttpApiError(
             status_code=401,
             code=HttpErrorCode.AUTH_SESSION_INVALID,
-            clear_auth_cookies=True,
         ) from exc
     except InvalidTransactionCursorError as exc:
         raise HttpApiError(status_code=422, code=HttpErrorCode.INVALID_CURSOR) from exc
@@ -130,6 +144,7 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
         openapi_extra={
             **_SESSION_SECURITY,
             "parameters": [
+                SESSION_BINDING_OPENAPI_PARAMETER,
                 _date_parameter("start"),
                 _date_parameter("end"),
                 _limit_parameter("category_limit", DEFAULT_REPORT_LIMIT),
@@ -153,9 +168,9 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
             default=DEFAULT_REPORT_LIMIT,
         )
 
-        async def execute(raw_session: str) -> PeriodReportSnapshot:
+        async def execute(credentials: SessionCredentials) -> PeriodReportSnapshot:
             return await service.period_report(
-                raw_session,
+                credentials,
                 start,
                 end,
                 category_limit=category_limit,
@@ -172,6 +187,7 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
         openapi_extra={
             **_SESSION_SECURITY,
             "parameters": [
+                SESSION_BINDING_OPENAPI_PARAMETER,
                 _date_parameter("current_start"),
                 _date_parameter("current_end"),
                 _date_parameter("previous_start"),
@@ -189,9 +205,9 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
         previous_end = utc_timestamp(query["previous_end"])
         validate_comparison(current_start, current_end, previous_start, previous_end)
 
-        async def execute(raw_session: str) -> PeriodComparisonSnapshot:
+        async def execute(credentials: SessionCredentials) -> PeriodComparisonSnapshot:
             return await service.compare_periods(
-                raw_session,
+                credentials,
                 current_start,
                 current_end,
                 previous_start,
@@ -208,6 +224,7 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
         openapi_extra={
             **_SESSION_SECURITY,
             "parameters": [
+                SESSION_BINDING_OPENAPI_PARAMETER,
                 _date_parameter("start"),
                 _date_parameter("end"),
                 {
@@ -231,8 +248,8 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
         validate_period(start, end)
         grain = timeseries_grain(query["grain"])
 
-        async def execute(raw_session: str) -> TimeSeriesSnapshot:
-            return await service.timeseries(raw_session, start, end, grain=grain)
+        async def execute(credentials: SessionCredentials) -> TimeSeriesSnapshot:
+            return await service.timeseries(credentials, start, end, grain=grain)
 
         result = await _safe_session_call(request, execute)
         return timeseries_response(result)
@@ -244,6 +261,7 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
         openapi_extra={
             **_SESSION_SECURITY,
             "parameters": [
+                SESSION_BINDING_OPENAPI_PARAMETER,
                 _limit_parameter("limit", DEFAULT_TRANSACTION_LIMIT),
                 {
                     "in": "query",
@@ -268,9 +286,9 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
         limit = bounded_limit(query.get("limit"), default=DEFAULT_TRANSACTION_LIMIT)
         cursor = canonical_cursor(query.get("cursor"))
 
-        async def execute(raw_session: str) -> TransactionCursorPage:
+        async def execute(credentials: SessionCredentials) -> TransactionCursorPage:
             return await service.transactions(
-                raw_session,
+                credentials,
                 limit=limit,
                 raw_cursor=cursor,
             )
@@ -288,6 +306,7 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
         openapi_extra={
             **_SESSION_SECURITY,
             "parameters": [
+                SESSION_BINDING_OPENAPI_PARAMETER,
                 _limit_parameter("limit", DEFAULT_TRANSACTION_LIMIT),
                 {
                     "in": "query",
@@ -312,9 +331,9 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
         limit = bounded_limit(query.get("limit"), default=DEFAULT_TRANSACTION_LIMIT)
         cursor = canonical_cursor(query.get("cursor"))
 
-        async def execute(raw_session: str) -> TransactionCursorPage:
+        async def execute(credentials: SessionCredentials) -> TransactionCursorPage:
             return await service.deleted_transactions(
-                raw_session,
+                credentials,
                 limit=limit,
                 raw_cursor=cursor,
             )
@@ -341,8 +360,8 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
         strict_query(request, allowed=frozenset())
         parsed_id = canonical_uuid(transaction_id)
 
-        async def execute(raw_session: str) -> TransactionSnapshot:
-            return await service.transaction(raw_session, parsed_id)
+        async def execute(credentials: SessionCredentials) -> TransactionSnapshot:
+            return await service.transaction(credentials, parsed_id)
 
         result = await _safe_session_call(request, execute)
         return transaction_response(result)

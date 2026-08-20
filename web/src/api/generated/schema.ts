@@ -2249,7 +2249,10 @@ export interface operations {
             query?: {
                 archived?: boolean;
             };
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2306,6 +2309,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -2404,6 +2409,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -2513,6 +2520,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -2620,6 +2629,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -2727,6 +2738,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -2834,6 +2847,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 "X-CSRF-Token": string;
             };
             path?: never;
@@ -2880,7 +2895,10 @@ export interface operations {
     auth_me_api_v1_auth_me_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2934,6 +2952,8 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque binding for the exact session cookie represented by this response. */
+                    "X-Session-Binding"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2999,7 +3019,10 @@ export interface operations {
     list_bank_imports_api_v1_bank_imports_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -3051,6 +3074,8 @@ export interface operations {
                 profile: "canonical_v1";
             };
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -3152,7 +3177,10 @@ export interface operations {
     get_bank_import_api_v1_bank_imports__batch_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path: {
                 batch_id: string;
             };
@@ -3211,6 +3239,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -3317,7 +3347,10 @@ export interface operations {
     list_bank_import_rows_api_v1_bank_imports__batch_id__rows_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path: {
                 batch_id: string;
             };
@@ -3375,7 +3408,10 @@ export interface operations {
     get_bank_import_row_api_v1_bank_imports__batch_id__rows__row_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path: {
                 batch_id: string;
                 row_id: string;
@@ -3434,7 +3470,10 @@ export interface operations {
     list_reconciliation_candidates_api_v1_bank_imports__batch_id__rows__row_id__candidates_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path: {
                 batch_id: string;
                 row_id: string;
@@ -3503,6 +3542,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -3613,6 +3654,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -3730,6 +3773,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -3846,7 +3891,10 @@ export interface operations {
                 /** @description Signed integrity-protected owner/filter-bound cursor. It is not encrypted; clients must treat it as opaque. */
                 cursor?: string;
             };
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -3894,6 +3942,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -4014,7 +4064,10 @@ export interface operations {
     get_budget_api_v1_budgets__budget_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path: {
                 budget_id: string;
             };
@@ -4073,6 +4126,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -4198,6 +4253,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -4305,6 +4362,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -4414,7 +4473,10 @@ export interface operations {
                 kind?: "expense" | "income";
                 archived?: boolean;
             };
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -4471,6 +4533,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -4572,6 +4636,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -4681,6 +4747,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -4788,6 +4856,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -4894,7 +4964,10 @@ export interface operations {
     dashboard_api_v1_dashboard_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -4933,6 +5006,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -5025,7 +5100,10 @@ export interface operations {
     active_draft_api_v1_drafts_active_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -5063,7 +5141,10 @@ export interface operations {
     get_draft_api_v1_drafts__draft_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path: {
                 draft_id: string;
             };
@@ -5113,6 +5194,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -5322,6 +5405,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -5418,6 +5503,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -5516,6 +5603,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -5614,6 +5703,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -5711,7 +5802,10 @@ export interface operations {
     list_exchange_rate_sources_api_v1_exchange_rate_sources_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -5759,6 +5853,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -5878,7 +5974,10 @@ export interface operations {
                 /** @description Signed integrity-protected owner/source-bound cursor. It is not encrypted; clients must treat it as opaque. */
                 cursor?: string;
             };
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path: {
                 source_id: string;
             };
@@ -5936,7 +6035,10 @@ export interface operations {
     get_exchange_rate_version_api_v1_exchange_rate_versions__version_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path: {
                 version_id: string;
             };
@@ -5994,7 +6096,10 @@ export interface operations {
     get_recurring_instance_api_v1_recurring_instances__instance_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path: {
                 instance_id: string;
             };
@@ -6053,6 +6158,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -6160,6 +6267,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -6271,7 +6380,10 @@ export interface operations {
                 /** @description Signed integrity-protected owner/filter-bound cursor. It is not encrypted; clients must treat it as opaque. */
                 cursor?: string;
             };
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6319,6 +6431,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -6463,7 +6577,10 @@ export interface operations {
     get_recurring_schedule_api_v1_recurring_schedules__schedule_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path: {
                 schedule_id: string;
             };
@@ -6522,6 +6639,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -6671,6 +6790,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -6781,7 +6902,10 @@ export interface operations {
                 /** @description Signed integrity-protected owner/filter-bound cursor. It is not encrypted; clients must treat it as opaque. */
                 cursor?: string;
             };
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path: {
                 schedule_id: string;
             };
@@ -6840,6 +6964,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -6947,6 +7073,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -7054,6 +7182,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -7165,7 +7295,10 @@ export interface operations {
                 previous_start: string;
                 previous_end: string;
             };
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7208,7 +7341,10 @@ export interface operations {
                 category_limit?: number;
                 transaction_limit?: number;
             };
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7250,7 +7386,10 @@ export interface operations {
                 start: string;
                 end: string;
             };
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7310,7 +7449,10 @@ export interface operations {
                 end: string;
                 grain: "day" | "week" | "month";
             };
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7348,7 +7490,10 @@ export interface operations {
     today_report_api_v1_reports_today_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7389,7 +7534,10 @@ export interface operations {
                 limit?: number;
                 cursor?: string;
             };
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7430,7 +7578,10 @@ export interface operations {
                 limit?: number;
                 cursor?: string;
             };
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7468,7 +7619,10 @@ export interface operations {
     transaction_detail_api_v1_transactions__transaction_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
             path: {
                 transaction_id: string;
             };
@@ -7518,6 +7672,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -7616,6 +7772,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -7723,6 +7881,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;
@@ -7830,6 +7990,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
                 /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
                 Origin?: string;
                 "X-CSRF-Token": string;

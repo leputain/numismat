@@ -7,7 +7,7 @@ from uuid import UUID
 
 from finbot.adapters.database.repositories.http_idempotency import IdempotencyResultKind
 from finbot.adapters.http.auth.crypto import HttpSecurityDigester
-from finbot.adapters.http.auth.service import SessionAuthenticator
+from finbot.adapters.http.auth.service import SessionAuthenticator, SessionCredentials
 from finbot.adapters.http.exchange_rates.cursor import ExchangeRateCursorCodec
 from finbot.adapters.http.exchange_rates.ports import ExchangeRateQueryUnitOfWorkFactory
 from finbot.adapters.http.mutations.ports import MutationUnitOfWork
@@ -130,9 +130,10 @@ class HttpExchangeRateService:
         cursor_codec: ExchangeRateCursorCodec,
         query_uow_factory: ExchangeRateQueryUnitOfWorkFactory,
         mutation_executor: HttpMutationExecutor,
+        allowed_telegram_user_ids: frozenset[int] | None = None,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
-        self._authenticator = SessionAuthenticator(digester)
+        self._authenticator = SessionAuthenticator(digester, allowed_telegram_user_ids)
         self._cursor_codec = cursor_codec
         self._query_uow_factory = query_uow_factory
         self._mutation_executor = mutation_executor
@@ -146,20 +147,20 @@ class HttpExchangeRateService:
 
     async def list_sources(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
     ) -> tuple[RateSourceSnapshot, ...]:
         now = self._now()
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             return await ListExchangeRateSources(uow.rates)(authenticated.owner.owner_id)
 
     async def list_versions(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         source_id: UUID,
         *,
         limit: int,
@@ -169,7 +170,7 @@ class HttpExchangeRateService:
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             owner_id = authenticated.owner.owner_id
@@ -193,14 +194,14 @@ class HttpExchangeRateService:
 
     async def get_version(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         version_id: UUID,
     ) -> RateVersionSnapshot:
         now = self._now()
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             return await GetExchangeRateVersion(uow.rates)(
@@ -210,7 +211,7 @@ class HttpExchangeRateService:
 
     async def converted_period(
         self,
-        raw_session_token: str,
+        credentials: SessionCredentials,
         version_id: UUID,
         start: datetime,
         end: datetime,
@@ -219,7 +220,7 @@ class HttpExchangeRateService:
         async with self._query_uow_factory() as uow:
             authenticated = await self._authenticator.authenticate_read(
                 uow.auth,
-                raw_session_token,
+                credentials,
                 now=now,
             )
             return await GetConvertedPeriodValuation(uow.finance, uow.rates)(

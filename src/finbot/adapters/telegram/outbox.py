@@ -16,6 +16,11 @@ from finbot.adapters.database.models import TelegramResponseOutbox
 from finbot.adapters.database.services.outbox import (
     bind_telegram_draft_presentation,
     lock_pending_responses,
+    response_draft_belongs_to_private_chat,
+)
+from finbot.adapters.telegram.principal import (
+    TELEGRAM_PRINCIPAL_DATA_KEY,
+    TelegramPrincipal,
 )
 
 type SpecialOutboxDelivery = Callable[[Bot, TelegramResponseOutbox], Awaitable[int | None]]
@@ -108,6 +113,8 @@ async def deliver_pending_responses(
             chat_id=chat_id,
         )
         for response in pending:
+            if not await response_draft_belongs_to_private_chat(session, response):
+                raise RuntimeError("Telegram outbox draft ownership mismatch")
             delivered_message_id = await deliver_response(
                 bot,
                 response,
@@ -150,21 +157,17 @@ class TelegramResponseOutboxMiddleware(BaseMiddleware):
         data: dict[str, Any],
     ) -> Any:
         update_id = data.get("finbot_update_id")
-        owner = data.get("event_from_user")
-        chat = data.get("event_chat")
+        principal = data.get(TELEGRAM_PRINCIPAL_DATA_KEY)
         bot = data.get("bot")
-        if (
-            not isinstance(update_id, int)
-            or owner is None
-            or chat is None
-            or not isinstance(bot, Bot)
-        ):
+        if type(update_id) is not int:
             return await handler(event, data)
+        if not isinstance(principal, TelegramPrincipal) or not isinstance(bot, Bot):
+            raise RuntimeError("Tracked Telegram delivery requires a verified principal")
 
         identity = {
             "update_id": update_id,
-            "owner_telegram_user_id": int(owner.id),
-            "chat_id": int(chat.id),
+            "owner_telegram_user_id": principal.telegram_user_id,
+            "chat_id": principal.chat_id,
         }
         if await deliver_pending_responses(
             self.sessions,

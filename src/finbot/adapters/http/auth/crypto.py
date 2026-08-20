@@ -66,6 +66,13 @@ class HttpSecurityDigester:
             raise ValueError("invalid session token")
         return SessionTokenDigest(self._digest(b"session", raw_token.encode("ascii")))
 
+    def session_binding(self, raw_token: str) -> str:
+        """Return a browser-visible binding for one exact raw session token."""
+        if not is_canonical_opaque_token(raw_token):
+            raise ValueError("invalid session token")
+        digest = self._digest(b"session-binding", raw_token.encode("ascii"))
+        return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
     def csrf(self, raw_token: str) -> CsrfTokenDigest:
         if not is_canonical_opaque_token(raw_token):
             raise ValueError("invalid CSRF token")

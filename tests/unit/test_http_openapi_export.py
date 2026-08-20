@@ -10,6 +10,11 @@ import pytest
 from fastapi.routing import APIRoute
 
 import finbot.adapters.http.app as http_app
+from finbot.adapters.http.auth.request import (
+    SESSION_BINDING_HEADER,
+    SESSION_BINDING_OPENAPI_PARAMETER,
+    SESSION_BINDING_OPENAPI_RESPONSE_HEADER,
+)
 from finbot.adapters.http.bank_imports.service import HttpBankImportService
 from finbot.adapters.http.openapi_contract import (
     OpenApiContractError,
@@ -111,6 +116,44 @@ def test_openapi_export_contains_finance_automation_surface_and_session_scheme()
     ]
     assert bank_paths.index("/api/v1/bank-imports/upload") < bank_paths.index(
         "/api/v1/bank-imports/{batch_id}"
+    )
+
+
+def test_every_protected_operation_declares_the_exact_session_binding_contract() -> None:
+    document = build_openapi_document()
+    paths = document.get("paths")
+    assert isinstance(paths, dict)
+    protected_operations = 0
+
+    for path_item in paths.values():
+        assert isinstance(path_item, dict)
+        for operation in path_item.values():
+            if not isinstance(operation, dict):
+                continue
+            security = operation.get("security", [])
+            if not any(
+                isinstance(requirement, dict) and "SessionCookie" in requirement
+                for requirement in security
+            ):
+                continue
+            protected_operations += 1
+            parameters = operation.get("parameters", [])
+            bindings = [
+                parameter
+                for parameter in parameters
+                if isinstance(parameter, dict)
+                and parameter.get("in") == "header"
+                and parameter.get("name") == SESSION_BINDING_HEADER
+            ]
+            assert bindings == [SESSION_BINDING_OPENAPI_PARAMETER]
+
+    # This count is deliberately exact: every current cookie-authenticated
+    # operation must carry the page-scoped binding, including future additions
+    # once the expected contract count is reviewed and updated.
+    assert protected_operations == 66
+    login = paths["/api/v1/auth/telegram"]["post"]
+    assert login["responses"]["200"]["headers"][SESSION_BINDING_HEADER] == (
+        SESSION_BINDING_OPENAPI_RESPONSE_HEADER
     )
 
 

@@ -23,6 +23,7 @@ from finbot.adapters.telegram.outbox import (
     TelegramResponseOutboxMiddleware,
     deliver_response,
 )
+from finbot.adapters.telegram.principal import TelegramPrincipal
 from finbot.application.dto import DraftRef
 from finbot.application.export import (
     CsvExportReceiptSnapshot,
@@ -338,8 +339,7 @@ async def test_replay_delivers_pending_export_and_skips_business_handler(
             cast(TelegramObject, object()),
             {
                 "finbot_update_id": 91_000_001,
-                "event_from_user": type("User", (), {"id": 92_000_002})(),
-                "event_chat": type("Chat", (), {"id": 93_000_003})(),
+                "finbot_principal": TelegramPrincipal(93_000_003, 93_000_003),
                 "bot": bot,
             },
         )
@@ -349,7 +349,39 @@ async def test_replay_delivers_pending_export_and_skips_business_handler(
     assert result is None
     assert len(calls) == 1
     assert calls[0]["update_id"] == 91_000_001
+    assert calls[0]["owner_telegram_user_id"] == 93_000_003
+    assert calls[0]["chat_id"] == 93_000_003
     assert calls[0]["special_delivery"] == delivery.deliver_job
+
+
+@pytest.mark.asyncio
+async def test_tracked_outbox_fails_closed_without_typed_principal() -> None:
+    middleware = TelegramResponseOutboxMiddleware(
+        cast(async_sessionmaker[AsyncSession], _Sessions(_Session())),
+    )
+
+    async def forbidden_handler(
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> None:
+        del event, data
+        raise AssertionError("unverified tracked update reached business handler")
+
+    bot = Bot("123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi")
+    try:
+        with pytest.raises(RuntimeError, match="verified principal"):
+            await middleware(
+                forbidden_handler,
+                cast(TelegramObject, object()),
+                {
+                    "finbot_update_id": 91_000_001,
+                    "event_from_user": type("User", (), {"id": 92_000_002})(),
+                    "event_chat": type("Chat", (), {"id": 93_000_003})(),
+                    "bot": bot,
+                },
+            )
+    finally:
+        await bot.session.close()
 
 
 @pytest.mark.asyncio

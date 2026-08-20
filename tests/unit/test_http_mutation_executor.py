@@ -25,6 +25,7 @@ from finbot.adapters.http.auth.ports import (
     SessionCheck,
     SessionCheckStatus,
 )
+from finbot.adapters.http.auth.service import SessionBindingMismatchError, SessionInvalidError
 from finbot.adapters.http.mutations.service import (
     HttpMutationExecutor,
     InvalidStoredMutationResultError,
@@ -38,10 +39,13 @@ OWNER_ID = UUID("018f0000-0000-7000-8000-000000000001")
 DRAFT_ID = UUID("018f0000-0000-7000-8000-000000000002")
 SECURITY_KEY = base64.urlsafe_b64encode(b"k" * 32).rstrip(b"=").decode("ascii")
 SESSION_TOKEN = base64.urlsafe_b64encode(b"s" * 32).rstrip(b"=").decode("ascii")
+SESSION_BINDING = HttpSecurityDigester(SECURITY_KEY).session_binding(SESSION_TOKEN)
 CSRF_TOKEN = base64.urlsafe_b64encode(b"c" * 32).rstrip(b"=").decode("ascii")
 IDEMPOTENCY_KEY = base64.urlsafe_b64encode(b"i" * 32).rstrip(b"=").decode("ascii")
+TELEGRAM_USER_ID = 424_242
 CREDENTIALS = MutationCredentials(
     session_token=SESSION_TOKEN,
+    session_binding=SESSION_BINDING,
     csrf_cookie=CSRF_TOKEN,
     csrf_header=CSRF_TOKEN,
     idempotency_key=IDEMPOTENCY_KEY,
@@ -57,7 +61,7 @@ class FakeAuthPersistence:
         return SessionCheck(
             SessionCheckStatus.ACTIVE,
             AuthenticatedSession(
-                AuthOwner(OWNER_ID, "ru_RU", "Europe/Moscow", "RUB"),
+                AuthOwner(OWNER_ID, "ru_RU", "Europe/Moscow", "RUB", TELEGRAM_USER_ID),
                 NOW + timedelta(hours=1),
             ),
         )
@@ -127,13 +131,68 @@ def _executor(
     events: list[str],
     *,
     clock: Any = lambda: NOW,
+    allowed_telegram_user_ids: frozenset[int] | None = None,
 ) -> HttpMutationExecutor:
     uow = FakeMutationUow(idempotency, events)
     return HttpMutationExecutor(
         digester=HttpSecurityDigester(SECURITY_KEY),
         uow_factory=FakeMutationUowFactory(uow, events),
+        allowed_telegram_user_ids=allowed_telegram_user_ids,
         clock=clock,
     )
+
+
+@pytest.mark.asyncio
+async def test_executor_rejects_session_removed_from_current_allowlist_before_mutation() -> None:
+    events: list[str] = []
+    idempotency = FakeIdempotency(events, status=IdempotencyClaimStatus.NEW)
+
+    async def must_not_mutate(*_args: object) -> MutationReceipt:
+        raise AssertionError("removed user must not reach a mutation")
+
+    with pytest.raises(SessionInvalidError):
+        await _executor(
+            idempotency,
+            events,
+            allowed_telegram_user_ids=frozenset((TELEGRAM_USER_ID + 1,)),
+        ).execute(
+            CREDENTIALS,
+            operation=MutationOperation.DRAFT_CREATE,
+            semantic_request={},
+            allowed_results=frozenset({(201, IdempotencyResultKind.DRAFT)}),
+            mutate=must_not_mutate,
+        )
+
+    assert events == ["session", "exit"]
+
+
+@pytest.mark.asyncio
+async def test_executor_rejects_stale_session_binding_before_session_or_domain_access() -> None:
+    events: list[str] = []
+    idempotency = FakeIdempotency(events, status=IdempotencyClaimStatus.NEW)
+    stale = MutationCredentials(
+        session_token=SESSION_TOKEN,
+        session_binding=HttpSecurityDigester(SECURITY_KEY).session_binding(
+            base64.urlsafe_b64encode(b"x" * 32).rstrip(b"=").decode("ascii")
+        ),
+        csrf_cookie=CSRF_TOKEN,
+        csrf_header=CSRF_TOKEN,
+        idempotency_key=IDEMPOTENCY_KEY,
+    )
+
+    async def must_not_mutate(*_args: object) -> MutationReceipt:
+        raise AssertionError("stale page must not reach the domain mutation")
+
+    with pytest.raises(SessionBindingMismatchError):
+        await _executor(idempotency, events).execute(
+            stale,
+            operation=MutationOperation.DRAFT_CREATE,
+            semantic_request={},
+            allowed_results=frozenset({(201, IdempotencyResultKind.DRAFT)}),
+            mutate=must_not_mutate,
+        )
+
+    assert events == ["exit"]
 
 
 @pytest.mark.asyncio
