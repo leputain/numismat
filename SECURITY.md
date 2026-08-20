@@ -159,8 +159,9 @@ receipt также не должен раскрывать текст/keyboard в
 
 Production HTTP auth не имеет bypass и запускается только при валидных `MINIAPP_PUBLIC_URL` и `HTTP_SECURITY_KEY`.
 Public URL обязан быть одним canonical HTTPS origin без credentials, query или fragment. Initial signed Telegram login
-может не иметь `Origin` в native WebView; если заголовок присутствует, он обязан точно совпасть с configured origin.
-Logout и все protected mutations всегда требуют exact Origin. Security key — независимые 32 random bytes, он не
+считает один bounded ASCII `Origin` необязательной transport metadata: native WebView не предоставляет единый portable
+Origin contract, поэтому authority задают verified Telegram HMAC, exact owner, TTL и replay denial. Duplicate, empty,
+oversized и non-ASCII Origin отклоняются. Logout и все protected mutations всегда требуют exact Origin. Security key — независимые 32 random bytes, он не
 совпадает с Telegram bot token и поступает через environment или `/run/secrets/http_security_key`.
 
 `POST /api/v1/auth/telegram` принимает не более 12 KiB JSON и 8 KiB raw `initData`, запрещает ambiguous/duplicate

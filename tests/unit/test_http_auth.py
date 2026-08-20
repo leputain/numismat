@@ -452,17 +452,12 @@ async def test_csrf_failure_does_not_clear_or_revoke_session() -> None:
 
 
 @pytest.mark.asyncio
-async def test_auth_boundary_rejects_origin_content_type_duplicate_json_and_large_body() -> None:
+async def test_auth_boundary_rejects_content_type_duplicate_json_and_large_body() -> None:
     owner = AuthOwner(uuid7(), "ru_RU", "Europe/Moscow", "RUB")
     app = _auth_app(FakeAuthPersistence(owner))
     body = json.dumps({"initData": _signed_init_data()})
 
     async with _client(app) as client:
-        wrong_origin = await client.post(
-            "/api/v1/auth/telegram",
-            headers={"Origin": "https://wrong.example"},
-            content=body,
-        )
         wrong_type = await client.post(
             "/api/v1/auth/telegram",
             headers={"Origin": ORIGIN, "Content-Type": "text/plain"},
@@ -484,12 +479,11 @@ async def test_auth_boundary_rejects_origin_content_type_duplicate_json_and_larg
             content=b"x" * (12 * 1024 + 1),
         )
 
-    assert wrong_origin.status_code == 403
     assert wrong_type.status_code == 415
     assert duplicate.status_code == 422
     assert deeply_nested.status_code == 422
     assert too_large.status_code == 413
-    for response in (wrong_origin, wrong_type, duplicate, deeply_nested, too_large):
+    for response in (wrong_type, duplicate, deeply_nested, too_large):
         assert response.headers["cache-control"] == "no-store, no-cache"
         assert response.headers["referrer-policy"] == "no-referrer"
 
@@ -573,6 +567,26 @@ async def test_signed_telegram_login_accepts_missing_origin_from_native_webview(
 
 
 @pytest.mark.asyncio
+async def test_signed_telegram_login_does_not_trust_webview_origin_as_authority() -> None:
+    owner = AuthOwner(uuid7(), "ru_RU", "Europe/Moscow", "RUB")
+    persistence = FakeAuthPersistence(owner)
+
+    async with _client(_auth_app(persistence)) as client:
+        response = await client.post(
+            "/api/v1/auth/telegram",
+            headers={
+                "Origin": "https://web.telegram.org",
+                "Content-Type": "application/json",
+            },
+            content=json.dumps({"initData": _signed_init_data()}),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["authenticated"] is True
+    assert persistence.created_session_digest is not None
+
+
+@pytest.mark.asyncio
 async def test_auth_boundary_rejects_ambiguous_security_headers_with_fixed_codes() -> None:
     owner = AuthOwner(uuid7(), "ru_RU", "Europe/Moscow", "RUB")
     persistence = FakeAuthPersistence(owner)
@@ -587,6 +601,21 @@ async def test_auth_boundary_rejects_ambiguous_security_headers_with_fixed_codes
                 ("Origin", ORIGIN),
                 ("Content-Type", "application/json"),
             ],
+            content=body,
+        )
+        empty_origin = await client.post(
+            "/api/v1/auth/telegram",
+            headers=[("Origin", ""), ("Content-Type", "application/json")],
+            content=body,
+        )
+        oversized_origin = await client.post(
+            "/api/v1/auth/telegram",
+            headers={"Origin": "x" * 4097, "Content-Type": "application/json"},
+            content=body,
+        )
+        non_ascii_origin = await client.post(
+            "/api/v1/auth/telegram",
+            headers=[(b"Origin", b"\xff"), (b"Content-Type", b"application/json")],
             content=body,
         )
         duplicate_type = await client.post(
@@ -616,6 +645,10 @@ async def test_auth_boundary_rejects_ambiguous_security_headers_with_fixed_codes
             "/api/v1/auth/logout",
             headers={"Origin": ORIGIN},
         )
+        missing_logout_origin = await client.post(
+            "/api/v1/auth/logout",
+            headers={"X-CSRF-Token": CSRF_TOKEN},
+        )
         duplicate_csrf = await client.post(
             "/api/v1/auth/logout",
             headers=[
@@ -641,10 +674,15 @@ async def test_auth_boundary_rejects_ambiguous_security_headers_with_fixed_codes
 
     assert duplicate_origin.status_code == 403
     assert duplicate_origin.json()["error"]["code"] == "origin_forbidden"
+    for response in (empty_origin, oversized_origin, non_ascii_origin):
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == "origin_forbidden"
     assert duplicate_type.status_code == 422
     assert encoded.status_code == 415
     assert missing_csrf.status_code == 403
     assert missing_csrf.json()["error"]["code"] == "csrf_failed"
+    assert missing_logout_origin.status_code == 403
+    assert missing_logout_origin.json()["error"]["code"] == "origin_forbidden"
     assert duplicate_csrf.status_code == 403
     assert duplicate_csrf.json()["error"]["code"] == "csrf_failed"
     assert duplicate_csrf.headers.get_list("set-cookie") == []
@@ -692,7 +730,10 @@ async def test_auth_logs_and_responses_do_not_leak_untrusted_auth_material() -> 
         async with _client(app) as client:
             response = await client.post(
                 "/api/v1/auth/telegram",
-                headers={"Origin": ORIGIN, "X-Unsafe-Marker": sensitive},
+                headers={
+                    "Origin": "https://web.telegram.org",
+                    "X-Unsafe-Marker": sensitive,
+                },
                 json={"initData": tampered},
             )
     finally:

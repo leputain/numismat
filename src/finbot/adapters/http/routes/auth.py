@@ -80,24 +80,36 @@ def _raw_header(
 def _require_exact_origin(
     request: Request,
     expected_origin: str,
-    *,
-    allow_missing: bool = False,
 ) -> None:
     raw = _raw_header(
         request,
         b"origin",
-        required=not allow_missing,
+        required=True,
+        error_code=HttpErrorCode.ORIGIN_FORBIDDEN,
+        status_code=403,
+    )
+    try:
+        value = raw.decode("ascii") if raw is not None else ""
+    except UnicodeDecodeError as exc:
+        raise HttpApiError(status_code=403, code=HttpErrorCode.ORIGIN_FORBIDDEN) from exc
+    if value != expected_origin:
+        raise HttpApiError(status_code=403, code=HttpErrorCode.ORIGIN_FORBIDDEN)
+
+
+def _validate_optional_login_origin(request: Request) -> None:
+    raw = _raw_header(
+        request,
+        b"origin",
+        required=False,
         error_code=HttpErrorCode.ORIGIN_FORBIDDEN,
         status_code=403,
     )
     if raw is None:
         return
     try:
-        value = raw.decode("ascii")
+        raw.decode("ascii")
     except UnicodeDecodeError as exc:
         raise HttpApiError(status_code=403, code=HttpErrorCode.ORIGIN_FORBIDDEN) from exc
-    if value != expected_origin:
-        raise HttpApiError(status_code=403, code=HttpErrorCode.ORIGIN_FORBIDDEN)
 
 
 def _cookies(request: Request) -> dict[str, str]:
@@ -214,9 +226,10 @@ def auth_router(service: TelegramAuthService, *, expected_origin: str) -> APIRou
     )
     async def telegram_auth(request: Request) -> Response:
         try:
-            # Native Telegram WebViews may omit Origin on their initial signed login.
-            # A present Origin stays exact; the HMAC/owner/TTL/replay gates remain authoritative.
-            _require_exact_origin(request, expected_origin, allow_missing=True)
+            # Telegram WebViews do not expose one portable browser Origin contract.
+            # Initial-login authority is signed initData, exact owner, TTL, and replay denial.
+            # Origin remains bounded/unambiguous metadata here; protected writes require it exactly.
+            _validate_optional_login_origin(request)
             body = await _bounded_auth_body(request)
             result = await service.login(body.initData)
         except TelegramAuthVerificationError as exc:
