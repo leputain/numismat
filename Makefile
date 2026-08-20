@@ -13,7 +13,7 @@ OPS_COMPOSE = $(COMPOSE) -p $(OPS_PROJECT) -f compose.ops.yaml
 	openapi-check frontend-api-check frontend-typecheck frontend-test frontend-build \
 	frontend-check frontend-audit \
 	web-image web-edge-smoke web-secrets-check release-gate release-gate-ci \
-	release-gate-ci-timed
+	release-gate-ci-timed release-gate-timed
 
 COMPOSE_CONFIG_HTTP_ENV = MINIAPP_PUBLIC_URL=https://numismat.invalid \
 	HTTP_SECURITY_KEY=invalid-compose-config-placeholder \
@@ -175,6 +175,17 @@ release-gate-ci-timed:
 	bash scripts/release-gate-timed.sh "openapi-check" $(MAKE) openapi-check
 	bash scripts/release-gate-timed.sh "frontend-api-check" $(MAKE) frontend-api-check
 	bash scripts/release-gate-timed.sh "frontend-audit" $(MAKE) frontend-audit
+
+release-gate-timed:
+	bash scripts/release-gate-timed.sh "uv sync --frozen" $(UV) sync --frozen
+	bash scripts/release-gate-timed.sh "compose-config" $(MAKE) compose-config
+	bash scripts/release-gate-timed.sh "openapi-check" $(MAKE) openapi-check
+	bash scripts/release-gate-timed.sh "frontend-api-check" $(MAKE) frontend-api-check
+	bash scripts/release-gate-timed.sh "web-secrets-check" $(MAKE) web-secrets-check
+	bash scripts/release-gate-timed.sh "web-edge-smoke" $(MAKE) web-edge-smoke
+	bash scripts/release-gate-timed.sh "frontend-audit" $(MAKE) frontend-audit
+	bash scripts/release-gate-timed.sh "healthcheck" $(MAKE) healthcheck
+	bash scripts/release-gate-timed.sh "audit" $(MAKE) audit
 
 audit:
 	@set -euo pipefail; \
