@@ -22,6 +22,8 @@ from finbot.application.dto import (
     PreparedOcrDraft,
     PreparedTransactionDraft,
     PrepareRepeatDraftCommand,
+    TimeSeriesAggregateRow,
+    TimeSeriesGrain,
     TransactionCursor,
     TransactionCursorItem,
     TransactionMutationResult,
@@ -180,6 +182,17 @@ class FinanceReader(Protocol):
         *,
         limit: int,
     ) -> tuple[TransactionSnapshot, ...]: ...
+
+    async def timeseries_by_currency(
+        self,
+        owner_id: UUID,
+        start: datetime,
+        end: datetime,
+        *,
+        timezone: str,
+        grain: TimeSeriesGrain,
+        row_limit: int,
+    ) -> tuple[TimeSeriesAggregateRow, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)

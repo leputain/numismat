@@ -13,6 +13,7 @@ from finbot.adapters.http.auth.cookies import (
     parse_cookie_headers,
 )
 from finbot.adapters.http.errors import HttpApiError, HttpErrorCode
+from finbot.application.dto import TimeSeriesGrain
 
 MAX_QUERY_BYTES = 2048
 MAX_QUERY_FIELDS = 8
@@ -135,6 +136,13 @@ def validate_comparison(
     validate_period(previous_start, previous_end)
     if previous_end > current_start:
         raise _invalid_query()
+
+
+def timeseries_grain(value: str) -> TimeSeriesGrain:
+    try:
+        return TimeSeriesGrain(value)
+    except ValueError as exc:
+        raise _invalid_query() from exc
 
 
 def canonical_uuid(value: str) -> UUID:

@@ -1,6 +1,7 @@
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from finbot.application.dto import (
     AccountSnapshot,
@@ -10,6 +11,9 @@ from finbot.application.dto import (
     DeletedTransactionCursor,
     DeletedTransactionCursorItem,
     OwnerSnapshot,
+    TimeSeriesAggregateRow,
+    TimeSeriesCurrencyTotals,
+    TimeSeriesGrain,
     TransactionCursor,
     TransactionCursorItem,
     TransactionSnapshot,
@@ -253,3 +257,42 @@ class InMemoryQueryRepository:
             reverse=True,
         )
         return tuple(ordered[:limit])
+
+    async def timeseries_by_currency(
+        self,
+        owner_id: UUID,
+        start: datetime,
+        end: datetime,
+        *,
+        timezone: str,
+        grain: TimeSeriesGrain,
+        row_limit: int,
+    ) -> tuple[TimeSeriesAggregateRow, ...]:
+        zone = ZoneInfo(timezone)
+        grouped: dict[tuple[date, str], list[int]] = {}
+        for transaction in self._in_period(owner_id, start, end):
+            local_date = transaction.occurred_at.astimezone(zone).date()
+            if grain is TimeSeriesGrain.WEEK:
+                local_date -= timedelta(days=local_date.weekday())
+            elif grain is TimeSeriesGrain.MONTH:
+                local_date = local_date.replace(day=1)
+            values = grouped.setdefault((local_date, transaction.currency), [0, 0, 0, 0])
+            if transaction.kind is TransactionType.INCOME:
+                values[0] += transaction.amount_minor
+                values[2] += 1
+            else:
+                values[1] += transaction.amount_minor
+                values[3] += 1
+        return tuple(
+            TimeSeriesAggregateRow(
+                bucket_local_date=bucket_local_date,
+                totals=TimeSeriesCurrencyTotals(
+                    currency=currency,
+                    income_minor=values[0],
+                    expense_minor=values[1],
+                    income_count=values[2],
+                    expense_count=values[3],
+                ),
+            )
+            for (bucket_local_date, currency), values in sorted(grouped.items())
+        )[:row_limit]

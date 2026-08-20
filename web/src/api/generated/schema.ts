@@ -895,6 +895,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/reports/timeseries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Timeseries */
+        get: operations["timeseries_api_v1_reports_timeseries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/reports/today": {
         parameters: {
             query?: never;
@@ -2088,6 +2105,62 @@ export interface components {
             /** Version */
             version: number;
         };
+        /** TimeSeriesBucketResponse */
+        TimeSeriesBucketResponse: {
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /** Totals */
+            totals: components["schemas"]["TimeSeriesCurrencyTotalsResponse"][];
+        };
+        /** TimeSeriesCurrencyTotalsResponse */
+        TimeSeriesCurrencyTotalsResponse: {
+            /** Currency */
+            currency: string;
+            /** Expense Count */
+            expense_count: number;
+            /** Expense Minor */
+            expense_minor: string;
+            /** Income Count */
+            income_count: number;
+            /** Income Minor */
+            income_minor: string;
+            /** Net Minor */
+            net_minor: string;
+        };
+        /** TimeSeriesPeriodResponse */
+        TimeSeriesPeriodResponse: {
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+        };
+        /** TimeSeriesResponse */
+        TimeSeriesResponse: {
+            /** Buckets */
+            buckets: components["schemas"]["TimeSeriesBucketResponse"][];
+            /**
+             * Grain
+             * @enum {string}
+             */
+            grain: "day" | "week" | "month";
+            period: components["schemas"]["TimeSeriesPeriodResponse"];
+            /** Timezone */
+            timezone: string;
+        };
         /** TransactionMutationResultResponse */
         TransactionMutationResultResponse: {
             /**
@@ -2233,7 +2306,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -2330,7 +2404,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -2438,7 +2513,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -2544,7 +2620,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -2650,7 +2727,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -2973,7 +3051,8 @@ export interface operations {
                 profile: "canonical_v1";
             };
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -3132,7 +3211,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -3423,7 +3503,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -3532,7 +3613,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -3648,7 +3730,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -3811,7 +3894,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -3989,7 +4073,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -4113,7 +4198,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -4219,7 +4305,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -4384,7 +4471,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -4484,7 +4572,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -4592,7 +4681,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -4698,7 +4788,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -4842,7 +4933,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -5021,7 +5113,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -5229,7 +5322,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -5324,7 +5418,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -5421,7 +5516,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -5518,7 +5614,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -5662,7 +5759,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -5955,7 +6053,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -6061,7 +6160,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -6219,7 +6319,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -6421,7 +6522,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -6569,7 +6671,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -6737,7 +6840,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -6843,7 +6947,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -6949,7 +7054,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -7197,6 +7303,48 @@ export interface operations {
             };
         };
     };
+    timeseries_api_v1_reports_timeseries_get: {
+        parameters: {
+            query: {
+                start: string;
+                end: string;
+                grain: "day" | "week" | "month";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeSeriesResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
     today_report_api_v1_reports_today_get: {
         parameters: {
             query?: never;
@@ -7370,7 +7518,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -7467,7 +7616,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -7573,7 +7723,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;
@@ -7679,7 +7830,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                Origin: string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
                 "X-CSRF-Token": string;
                 /** @description Opaque owner-wide idempotency key retained for 24 hours. */
                 "Idempotency-Key": string;

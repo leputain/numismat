@@ -14,12 +14,15 @@ from finbot.application.dto import (
     DashboardSnapshot,
     PeriodComparisonSnapshot,
     PeriodReportSnapshot,
+    TimeSeriesGrain,
+    TimeSeriesSnapshot,
     TransactionSnapshot,
 )
 from finbot.application.use_cases.queries import (
     ComparePeriods,
     GetDashboard,
     GetPeriodReport,
+    GetTimeSeries,
     GetTransaction,
     ListDeletedTransactionsByCursor,
     ListTransactionsByCursor,
@@ -157,6 +160,30 @@ class FinanceQueryService:
                 current_end,
                 previous_start,
                 previous_end,
+            )
+
+    async def timeseries(
+        self,
+        raw_session_token: str,
+        start: datetime,
+        end: datetime,
+        *,
+        grain: TimeSeriesGrain,
+    ) -> TimeSeriesSnapshot:
+        now = self._now()
+        async with self._uow_factory() as uow:
+            authenticated = await self._authenticator.authenticate_read(
+                uow.auth,
+                raw_session_token,
+                now=now,
+            )
+            owner = authenticated.owner
+            return await GetTimeSeries(uow.finance)(
+                owner.owner_id,
+                start,
+                end,
+                timezone=owner.timezone,
+                grain=grain,
             )
 
     async def transactions(

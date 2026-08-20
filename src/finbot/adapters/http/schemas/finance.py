@@ -13,6 +13,8 @@ from finbot.application.dto import (
     DashboardSnapshot,
     PeriodComparisonSnapshot,
     PeriodReportSnapshot,
+    TimeSeriesCurrencyTotals,
+    TimeSeriesSnapshot,
     TransactionSnapshot,
 )
 
@@ -92,6 +94,33 @@ class PeriodReportResponse(ApiModel):
 class PeriodComparisonResponse(ApiModel):
     current_period: PeriodTotalsResponse = Field(repr=False)
     comparable_period: PeriodTotalsResponse = Field(repr=False)
+
+
+class TimeSeriesPeriodResponse(ApiModel):
+    start: datetime = Field(repr=False)
+    end: datetime = Field(repr=False)
+
+
+class TimeSeriesCurrencyTotalsResponse(ApiModel):
+    currency: str = Field(pattern=r"^[A-Z]{3}$", repr=False)
+    income_minor: NonNegativeMinor
+    expense_minor: NonNegativeMinor
+    net_minor: SignedMinor
+    income_count: int = Field(ge=0, le=2**63 - 1, repr=False)
+    expense_count: int = Field(ge=0, le=2**63 - 1, repr=False)
+
+
+class TimeSeriesBucketResponse(ApiModel):
+    start: datetime = Field(repr=False)
+    end: datetime = Field(repr=False)
+    totals: tuple[TimeSeriesCurrencyTotalsResponse, ...] = Field(max_length=32, repr=False)
+
+
+class TimeSeriesResponse(ApiModel):
+    period: TimeSeriesPeriodResponse = Field(repr=False)
+    timezone: str = Field(min_length=1, max_length=64, repr=False)
+    grain: Literal["day", "week", "month"]
+    buckets: tuple[TimeSeriesBucketResponse, ...] = Field(max_length=366, repr=False)
 
 
 class TransactionPageResponse(ApiModel):
@@ -178,5 +207,31 @@ def comparison_response(value: PeriodComparisonSnapshot) -> PeriodComparisonResp
             start=value.previous_start,
             end=value.previous_end,
             totals=tuple(currency_totals_response(item) for item in value.previous_totals),
+        ),
+    )
+
+
+def timeseries_response(value: TimeSeriesSnapshot) -> TimeSeriesResponse:
+    def totals_response(item: TimeSeriesCurrencyTotals) -> TimeSeriesCurrencyTotalsResponse:
+        return TimeSeriesCurrencyTotalsResponse(
+            currency=item.currency,
+            income_minor=str(item.income_minor),
+            expense_minor=str(item.expense_minor),
+            net_minor=str(item.net_minor),
+            income_count=item.income_count,
+            expense_count=item.expense_count,
+        )
+
+    return TimeSeriesResponse(
+        period=TimeSeriesPeriodResponse(start=value.start, end=value.end),
+        timezone=value.timezone,
+        grain=value.grain.value,
+        buckets=tuple(
+            TimeSeriesBucketResponse(
+                start=bucket.start,
+                end=bucket.end,
+                totals=tuple(totals_response(item) for item in bucket.totals),
+            )
+            for bucket in value.buckets
         ),
     )

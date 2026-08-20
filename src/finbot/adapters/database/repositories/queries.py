@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import Date, case, cast, func, select
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,12 +23,17 @@ from finbot.application.dto import (
     DeletedTransactionCursor,
     DeletedTransactionCursorItem,
     OwnerSnapshot,
+    TimeSeriesAggregateRow,
+    TimeSeriesCurrencyTotals,
+    TimeSeriesGrain,
     TransactionCursor,
     TransactionCursorItem,
     TransactionSnapshot,
 )
 from finbot.application.queries.transactions import TransactionDetails
 from finbot.domain.transactions import TransactionType
+
+_MAX_TIMESERIES_QUERY_ROW_LIMIT = 366 * 32 + 1
 
 
 def _transaction_snapshot(details: TransactionDetails) -> TransactionSnapshot:
@@ -337,6 +342,74 @@ class SqlAlchemyQueryRepository:
                 expense_minor=grouped[currency].get(TransactionType.EXPENSE.value, 0),
             )
             for currency in sorted(grouped)
+        )
+
+    async def timeseries_by_currency(
+        self,
+        owner_id: UUID,
+        start: datetime,
+        end: datetime,
+        *,
+        timezone: str,
+        grain: TimeSeriesGrain,
+        row_limit: int,
+    ) -> tuple[TimeSeriesAggregateRow, ...]:
+        if (
+            type(row_limit) is not int
+            or not 1 <= row_limit <= _MAX_TIMESERIES_QUERY_ROW_LIMIT
+        ):
+            raise ValueError("time-series query row limit is invalid")
+        local_timestamp = func.timezone(timezone, Transaction.occurred_at)
+        bucket_local_date = cast(
+            func.date_trunc(grain.value, local_timestamp),
+            Date,
+        ).label("bucket_local_date")
+        income = Transaction.type == TransactionType.INCOME.value
+        expense = Transaction.type == TransactionType.EXPENSE.value
+        rows = await self._session.execute(
+            select(
+                bucket_local_date,
+                Transaction.currency,
+                func.coalesce(
+                    func.sum(case((income, Transaction.amount_minor), else_=0)),
+                    0,
+                ).label("income_minor"),
+                func.coalesce(
+                    func.sum(case((expense, Transaction.amount_minor), else_=0)),
+                    0,
+                ).label("expense_minor"),
+                func.count().filter(income).label("income_count"),
+                func.count().filter(expense).label("expense_count"),
+            )
+            .where(
+                Transaction.user_id == owner_id,
+                Transaction.occurred_at >= start,
+                Transaction.occurred_at < end,
+                Transaction.deleted_at.is_(None),
+            )
+            .group_by(bucket_local_date, Transaction.currency)
+            .order_by(bucket_local_date, Transaction.currency)
+            .limit(row_limit)
+        )
+        return tuple(
+            TimeSeriesAggregateRow(
+                bucket_local_date=local_date,
+                totals=TimeSeriesCurrencyTotals(
+                    currency=currency,
+                    income_minor=int(income_minor),
+                    expense_minor=int(expense_minor),
+                    income_count=int(income_count),
+                    expense_count=int(expense_count),
+                ),
+            )
+            for (
+                local_date,
+                currency,
+                income_minor,
+                expense_minor,
+                income_count,
+                expense_count,
+            ) in rows
         )
 
     async def category_totals(

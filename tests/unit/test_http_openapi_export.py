@@ -48,7 +48,7 @@ def test_openapi_export_contains_finance_automation_surface_and_session_scheme()
     document = build_openapi_document()
     paths = document.get("paths")
     assert isinstance(paths, dict)
-    assert len(paths) == 62
+    assert len(paths) == 63
     expected_operations = {
         "/api/v1/accounts": {"get", "post"},
         "/api/v1/accounts/{account_id}": {"patch"},
@@ -84,6 +84,7 @@ def test_openapi_export_contains_finance_automation_surface_and_session_scheme()
         "/api/v1/bank-imports/{batch_id}/rows/{row_id}/link": {"post"},
         "/api/v1/bank-imports/{batch_id}/rows/{row_id}/skip": {"post"},
         "/api/v1/reports/today": {"get"},
+        "/api/v1/reports/timeseries": {"get"},
     }
     for path, methods in expected_operations.items():
         path_item = paths.get(path)

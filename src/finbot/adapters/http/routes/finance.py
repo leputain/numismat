@@ -17,6 +17,7 @@ from finbot.adapters.http.finance.request import (
     canonical_uuid,
     session_token,
     strict_query,
+    timeseries_grain,
     utc_timestamp,
     validate_comparison,
     validate_period,
@@ -27,22 +28,26 @@ from finbot.adapters.http.schemas.finance import (
     DashboardResponse,
     PeriodComparisonResponse,
     PeriodReportResponse,
+    TimeSeriesResponse,
     TransactionPageResponse,
     TransactionResponse,
     comparison_response,
     dashboard_response,
     period_report_response,
+    timeseries_response,
     transaction_response,
 )
 from finbot.application.dto import (
     PeriodComparisonSnapshot,
     PeriodReportSnapshot,
+    TimeSeriesSnapshot,
     TransactionSnapshot,
 )
 
 _SESSION_SECURITY: dict[str, Any] = {"security": [{"SessionCookie": []}]}
 _PERIOD_QUERY = frozenset({"start", "end", "category_limit", "transaction_limit"})
 _COMPARE_QUERY = frozenset({"current_start", "current_end", "previous_start", "previous_end"})
+_TIMESERIES_QUERY = frozenset({"start", "end", "grain"})
 _TRANSACTION_QUERY = frozenset({"limit", "cursor"})
 _UTC_DATE_SCHEMA = {
     "description": "UTC RFC 3339 timestamp with optional 1-6 fractional digits and `Z`.",
@@ -195,6 +200,42 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
 
         result = await _safe_session_call(request, execute)
         return comparison_response(result)
+
+    @router.get(
+        "/reports/timeseries",
+        response_model=TimeSeriesResponse,
+        responses=_error_responses(401, 422),
+        openapi_extra={
+            **_SESSION_SECURITY,
+            "parameters": [
+                _date_parameter("start"),
+                _date_parameter("end"),
+                {
+                    "in": "query",
+                    "name": "grain",
+                    "required": True,
+                    "schema": {
+                        "enum": ["day", "week", "month"],
+                        "type": "string",
+                    },
+                },
+            ],
+        },
+    )
+    async def timeseries(request: Request) -> TimeSeriesResponse:
+        query = strict_query(request, allowed=_TIMESERIES_QUERY)
+        if set(query) != _TIMESERIES_QUERY:
+            raise HttpApiError(status_code=422, code=HttpErrorCode.VALIDATION_FAILED)
+        start = utc_timestamp(query["start"])
+        end = utc_timestamp(query["end"])
+        validate_period(start, end)
+        grain = timeseries_grain(query["grain"])
+
+        async def execute(raw_session: str) -> TimeSeriesSnapshot:
+            return await service.timeseries(raw_session, start, end, grain=grain)
+
+        result = await _safe_session_call(request, execute)
+        return timeseries_response(result)
 
     @router.get(
         "/transactions",

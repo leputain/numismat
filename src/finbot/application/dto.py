@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
@@ -433,6 +433,64 @@ class CurrencyTotals:
     @property
     def net_minor(self) -> int:
         return self.income_minor - self.expense_minor
+
+
+class TimeSeriesGrain(StrEnum):
+    DAY = "day"
+    WEEK = "week"
+    MONTH = "month"
+
+
+@dataclass(frozen=True, slots=True)
+class TimeSeriesCurrencyTotals:
+    currency: str = field(repr=False)
+    income_minor: int = field(repr=False)
+    expense_minor: int = field(repr=False)
+    income_count: int = field(repr=False)
+    expense_count: int = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if (
+            len(self.currency) != 3
+            or not self.currency.isascii()
+            or not self.currency.isalpha()
+            or not self.currency.isupper()
+        ):
+            raise ValueError("Time-series currency must be an uppercase ISO-like code")
+        for value in (
+            self.income_minor,
+            self.expense_minor,
+            self.income_count,
+            self.expense_count,
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("Time-series aggregates must be non-negative integers")
+
+    @property
+    def net_minor(self) -> int:
+        return self.income_minor - self.expense_minor
+
+
+@dataclass(frozen=True, slots=True)
+class TimeSeriesAggregateRow:
+    bucket_local_date: date = field(repr=False)
+    totals: TimeSeriesCurrencyTotals = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class TimeSeriesBucketSnapshot:
+    start: datetime = field(repr=False)
+    end: datetime = field(repr=False)
+    totals: tuple[TimeSeriesCurrencyTotals, ...] = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class TimeSeriesSnapshot:
+    start: datetime = field(repr=False)
+    end: datetime = field(repr=False)
+    timezone: str = field(repr=False)
+    grain: TimeSeriesGrain
+    buckets: tuple[TimeSeriesBucketSnapshot, ...] = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)

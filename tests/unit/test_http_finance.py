@@ -257,6 +257,91 @@ async def test_today_report_uses_owner_timezone_and_fixed_bounded_limits() -> No
 
 
 @pytest.mark.asyncio
+async def test_timeseries_is_owner_local_dense_and_excludes_deleted_details() -> None:
+    first_expense = _transaction(
+        occurred_at=datetime(2026, 8, 10, 21, 30, tzinfo=UTC),
+        amount_minor=250,
+        description="timeseries-private-marker",
+    )
+    first_income = _transaction(
+        occurred_at=datetime(2026, 8, 11, 8, tzinfo=UTC),
+        amount_minor=900,
+        kind=TransactionType.INCOME,
+    )
+    second_currency = _transaction(
+        occurred_at=datetime(2026, 8, 12, 8, tzinfo=UTC),
+        amount_minor=7,
+        currency="USD",
+    )
+    deleted = _transaction(
+        occurred_at=datetime(2026, 8, 12, 9, tzinfo=UTC),
+        amount_minor=999,
+        deleted_at=NOW,
+    )
+    app, factory, _owner_id = _app(
+        (first_expense, first_income, second_currency, deleted)
+    )
+
+    async with _client(app) as client:
+        response = await client.get(
+            "/api/v1/reports/timeseries"
+            "?start=2026-08-10T21%3A00%3A00Z"
+            "&end=2026-08-13T21%3A00%3A00Z"
+            "&grain=day"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["period"] == {
+        "start": "2026-08-10T21:00:00Z",
+        "end": "2026-08-13T21:00:00Z",
+    }
+    assert payload["timezone"] == "Europe/Moscow"
+    assert payload["grain"] == "day"
+    assert payload["buckets"] == [
+        {
+            "start": "2026-08-10T21:00:00Z",
+            "end": "2026-08-11T21:00:00Z",
+            "totals": [
+                {
+                    "currency": "RUB",
+                    "income_minor": "900",
+                    "expense_minor": "250",
+                    "net_minor": "650",
+                    "income_count": 1,
+                    "expense_count": 1,
+                }
+            ],
+        },
+        {
+            "start": "2026-08-11T21:00:00Z",
+            "end": "2026-08-12T21:00:00Z",
+            "totals": [
+                {
+                    "currency": "USD",
+                    "income_minor": "0",
+                    "expense_minor": "7",
+                    "net_minor": "-7",
+                    "income_count": 0,
+                    "expense_count": 1,
+                }
+            ],
+        },
+        {
+            "start": "2026-08-12T21:00:00Z",
+            "end": "2026-08-13T21:00:00Z",
+            "totals": [],
+        },
+    ]
+    rendered = json.dumps(payload)
+    assert "timeseries-private-marker" not in rendered
+    assert str(first_expense.transaction_id) not in rendered
+    assert "999" not in rendered
+    assert factory.entries == 1
+    _security_headers(response)
+
+
+@pytest.mark.asyncio
 async def test_period_and_comparison_enforce_bounded_canonical_contract() -> None:
     transaction = _transaction(occurred_at=NOW - timedelta(days=1))
     app, _factory, _owner_id = _app((transaction,))
@@ -305,6 +390,52 @@ async def test_period_and_comparison_enforce_bounded_canonical_contract() -> Non
     assert overlap.status_code == 422
     for response in (period, compare, too_long, unequal, overlap):
         _security_headers(response)
+
+
+@pytest.mark.asyncio
+async def test_timeseries_rejects_noncanonical_or_unbounded_query_before_database() -> None:
+    app, factory, _owner_id = _app(())
+    cases = (
+        "/api/v1/reports/timeseries"
+        "?start=2026-08-01T00%3A00%3A00Z&end=2026-08-02T00%3A00%3A00Z",
+        "/api/v1/reports/timeseries"
+        "?start=2026-08-01T00%3A00%3A00Z&end=2026-08-02T00%3A00%3A00Z&grain=hour",
+        "/api/v1/reports/timeseries"
+        "?start=2026-08-01T03%3A00%3A00%2B03%3A00"
+        "&end=2026-08-02T03%3A00%3A00%2B03%3A00&grain=day",
+        "/api/v1/reports/timeseries"
+        "?start=2025-01-01T00%3A00%3A00Z&end=2026-08-02T00%3A00%3A00Z&grain=month",
+        "/api/v1/reports/timeseries"
+        "?start=2026-08-01T00%3A00%3A00Z&end=2026-08-02T00%3A00%3A00Z"
+        "&grain=day&unknown=1",
+    )
+
+    async with _client(app) as client:
+        responses = [await client.get(path) for path in cases]
+
+    assert all(response.status_code == 422 for response in responses)
+    assert all(response.json()["error"]["code"] == "validation_failed" for response in responses)
+    assert factory.entries == 0
+    for response in responses:
+        _security_headers(response)
+
+
+@pytest.mark.asyncio
+async def test_timeseries_date_max_overflow_fails_closed_as_validation_error() -> None:
+    app, factory, _owner_id = _app(())
+
+    async with _client(app) as client:
+        response = await client.get(
+            "/api/v1/reports/timeseries"
+            "?start=9999-12-31T00%3A00%3A00Z"
+            "&end=9999-12-31T12%3A00%3A00Z"
+            "&grain=day"
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_failed"
+    assert factory.entries == 1
+    _security_headers(response)
 
 
 @pytest.mark.asyncio
@@ -404,6 +535,7 @@ async def test_finance_openapi_is_authenticated_bounded_and_uses_string_money() 
         "/api/v1/reports/today",
         "/api/v1/reports/period",
         "/api/v1/reports/compare",
+        "/api/v1/reports/timeseries",
         "/api/v1/transactions",
         "/api/v1/transactions/{transaction_id}",
     }.issubset(paths)
@@ -412,6 +544,7 @@ async def test_finance_openapi_is_authenticated_bounded_and_uses_string_money() 
         "/api/v1/reports/today",
         "/api/v1/reports/period",
         "/api/v1/reports/compare",
+        "/api/v1/reports/timeseries",
         "/api/v1/transactions",
         "/api/v1/transactions/{transaction_id}",
     ):
@@ -443,6 +576,23 @@ async def test_finance_openapi_is_authenticated_bounded_and_uses_string_money() 
     page_schema = schema["components"]["schemas"]["TransactionPageResponse"]
     assert "next_cursor" in page_schema["required"]
     assert page_schema["properties"]["items"]["maxItems"] == 100
+    timeseries_parameters = paths["/api/v1/reports/timeseries"]["get"]["parameters"]
+    assert {item["name"] for item in timeseries_parameters if item["required"]} == {
+        "start",
+        "end",
+        "grain",
+    }
+    assert next(item for item in timeseries_parameters if item["name"] == "grain")["schema"] == {
+        "enum": ["day", "week", "month"],
+        "type": "string",
+    }
+    timeseries_schema = schema["components"]["schemas"]["TimeSeriesResponse"]
+    assert timeseries_schema["properties"]["buckets"]["maxItems"] == 366
+    bucket_schema = schema["components"]["schemas"]["TimeSeriesBucketResponse"]
+    assert bucket_schema["properties"]["totals"]["maxItems"] == 32
+    aggregate_schema = schema["components"]["schemas"]["TimeSeriesCurrencyTotalsResponse"]
+    assert aggregate_schema["properties"]["income_minor"]["type"] == "string"
+    assert aggregate_schema["properties"]["income_count"]["type"] == "integer"
 
 
 @pytest.mark.asyncio
