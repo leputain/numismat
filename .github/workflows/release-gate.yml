@@ -47,5 +47,14 @@ jobs:
         run: uv sync --frozen
       - name: Install frontend dependencies
         run: make frontend-install
-      - name: Run release gate checks
-        run: make release-gate-ci
+      - name: Init release gate timing summary
+        run: |
+          echo "# Release Gate timings" >> "$GITHUB_STEP_SUMMARY"
+      - name: Check compose configs
+        run: bash scripts/release-gate-timed.sh "compose-config" make compose-config
+      - name: Check OpenAPI contract
+        run: bash scripts/release-gate-timed.sh "openapi-check" make openapi-check
+      - name: Check frontend API sync
+        run: bash scripts/release-gate-timed.sh "frontend-api-check" make frontend-api-check
+      - name: Audit frontend deps
+        run: bash scripts/release-gate-timed.sh "frontend-audit" make frontend-audit
