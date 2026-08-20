@@ -123,62 +123,42 @@ function assertBoundedJsonRequest(serialized: string): void {
   }
 }
 
+async function discardResponseBody(response: Response): Promise<void> {
+  try {
+    const body = response.body as { cancel?: () => unknown } | null | undefined;
+    if (typeof body?.cancel === "function") {
+      await body.cancel();
+    }
+  } catch {
+    // Discard is best-effort and must not change retry/error classification.
+  }
+}
+
 async function readBoundedJson(response: Response): Promise<unknown> {
   const contentLength = response.headers.get("content-length");
   if (contentLength !== null) {
     if (!/^\d+$/u.test(contentLength) || Number(contentLength) > MAX_JSON_RESPONSE_BYTES) {
-      await response.body?.cancel().catch(() => undefined);
+      await discardResponseBody(response);
       throw new ProtocolError();
     }
   }
-  const stream = response.body;
-  let bytes: Uint8Array;
-  if (stream === null || typeof stream?.getReader !== "function") {
-    try {
-      const buffered = await response.arrayBuffer();
-      if (buffered.byteLength > MAX_JSON_RESPONSE_BYTES) {
-        throw new ProtocolError();
-      }
-      bytes = new Uint8Array(buffered);
-    } catch (error) {
-      if (error instanceof ProtocolError) {
-        throw error;
-      }
-      throw new ProtocolError();
-    }
-  } else {
-    const reader = stream.getReader();
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        size += value.byteLength;
-        if (size > MAX_JSON_RESPONSE_BYTES) {
-          await reader.cancel();
-          throw new ProtocolError();
-        }
-        chunks.push(value);
-      }
-    } catch (error) {
-      if (error instanceof ProtocolError) {
-        throw error;
-      }
-      throw new ProtocolError();
-    }
 
-    bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-  }
+  let text: string;
   try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    // Telegram's iOS WebView can expose Response.body/getReader while its
+    // ReadableStream implementation is unusable. The Body.text() path is the
+    // oldest interoperable Fetch API and these same-origin responses are
+    // independently bounded by the edge and application.
+    text = await response.text();
+  } catch {
+    throw new ProtocolError();
+  }
+
+  if (new TextEncoder().encode(text).byteLength > MAX_JSON_RESPONSE_BYTES) {
+    throw new ProtocolError();
+  }
+
+  try {
     return JSON.parse(text) as unknown;
   } catch {
     throw new ProtocolError();
@@ -241,7 +221,7 @@ export class SameOriginApiClient {
         if (response.status < 500 || attempt === attempts - 1) {
           break;
         }
-        await response.body?.cancel().catch(() => undefined);
+        await discardResponseBody(response);
       } catch {
         if (attempt === attempts - 1) {
           throw new NetworkError();
@@ -283,7 +263,7 @@ export class SameOriginApiClient {
       throw new NetworkError();
     }
     if (response.status >= 500) {
-      await response.body?.cancel().catch(() => undefined);
+      await discardResponseBody(response);
       throw new NetworkError();
     }
     return parseJsonResponse<T>(response);
@@ -497,7 +477,7 @@ export class SameOriginApiClient {
       throw new MutationResultUnknownError();
     }
     if (response.status >= 500) {
-      await response.body?.cancel().catch(() => undefined);
+      await discardResponseBody(response);
       throw new MutationResultUnknownError();
     }
     if (response.status === 401) {
@@ -535,7 +515,7 @@ export class SameOriginApiClient {
       throw new MutationResultUnknownError();
     }
     if (response.status >= 500) {
-      await response.body?.cancel().catch(() => undefined);
+      await discardResponseBody(response);
       throw new MutationResultUnknownError();
     }
     if (response.status === 401) {

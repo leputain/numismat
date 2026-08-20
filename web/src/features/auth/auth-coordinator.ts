@@ -47,9 +47,18 @@ export class AuthCoordinator {
     this.#api = dependencies.api;
     this.#telegram = dependencies.telegram;
     this.#clearProtectedState = dependencies.clearProtectedState;
-    this.#now = dependencies.now ?? Date.now;
-    this.#setTimer = dependencies.setTimer ?? setTimeout;
-    this.#clearTimer = dependencies.clearTimer ?? clearTimeout;
+    const now = dependencies.now;
+    const setTimer = dependencies.setTimer;
+    const clearTimer = dependencies.clearTimer;
+    this.#now = now === undefined ? () => Date.now() : () => now();
+    this.#setTimer =
+      setTimer === undefined
+        ? (callback, delay) => globalThis.setTimeout(callback, delay)
+        : (callback, delay) => setTimer(callback, delay);
+    this.#clearTimer =
+      clearTimer === undefined
+        ? (timer) => globalThis.clearTimeout(timer)
+        : (timer) => clearTimer(timer);
   }
 
   public get state(): AuthState {

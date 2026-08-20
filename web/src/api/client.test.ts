@@ -31,6 +31,24 @@ describe("SameOriginApiClient", () => {
     ).resolves.toEqual(payload);
   });
 
+  it("reads bounded JSON when a WebView exposes a broken stream reader", async () => {
+    const payload = { error: { code: "auth_session_invalid", message: "ignored", details: {} } };
+    const response = jsonResponse(payload, 401);
+    Object.defineProperty(response, "body", {
+      value: {
+        getReader(): never {
+          throw new TypeError("synthetic broken WebView stream");
+        },
+      },
+    });
+    const client = new SameOriginApiClient({ fetch: vi.fn<typeof fetch>().mockResolvedValue(response) });
+
+    await expect(client.get("/api/v1/auth/me", { protected: false, retry: false })).rejects.toMatchObject({
+      status: 401,
+      code: "auth_session_invalid",
+    });
+  });
+
   it("uses the fixed same-origin boundary and preserves key across a changed-CSRF retry", async () => {
     const cookieValues = [FIRST_CSRF, SECOND_CSRF];
     const fetchMock = vi

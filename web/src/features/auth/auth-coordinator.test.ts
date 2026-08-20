@@ -39,6 +39,43 @@ function coordinator(api: AuthApi, clear = vi.fn()) {
 }
 
 describe("AuthCoordinator", () => {
+  it("calls native browser timers with the global receiver", async () => {
+    const timer = 1 as ReturnType<typeof setTimeout>;
+    const setTimer = vi.fn(function (this: typeof globalThis) {
+      if (this !== globalThis) {
+        throw new TypeError("invalid native timer receiver");
+      }
+      return timer;
+    });
+    const clearTimer = vi.fn(function (this: typeof globalThis) {
+      if (this !== globalThis) {
+        throw new TypeError("invalid native timer receiver");
+      }
+    });
+    vi.stubGlobal("setTimeout", setTimer);
+    vi.stubGlobal("clearTimeout", clearTimer);
+
+    try {
+      const value = new AuthCoordinator({
+        api: {
+          getSession: vi.fn<AuthApi["getSession"]>().mockResolvedValue(SESSION),
+          authenticate: vi.fn(),
+          logout: vi.fn(),
+        },
+        telegram: telegram(),
+        clearProtectedState: vi.fn(),
+        now: () => Date.parse("2029-01-01T00:00:00Z"),
+      });
+
+      await expect(value.start()).resolves.toMatchObject({ status: "authenticated" });
+      value.dispose();
+      expect(setTimer).toHaveBeenCalledTimes(1);
+      expect(clearTimer).toHaveBeenCalledWith(timer);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("checks /me first and spends at most one Telegram proof under concurrent start", async () => {
     const getSession = vi
       .fn<AuthApi["getSession"]>()
