@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_serializer
 
 from finbot.adapters.http.schemas.common import ApiModel
 
@@ -20,3 +20,8 @@ class AuthSessionResponse(ApiModel):
     timezone: str = Field(min_length=1, max_length=64)
     base_currency: str = Field(pattern=r"^[A-Z]{3}$")
     expires_at: datetime
+
+    @field_serializer("expires_at", when_used="json")
+    def _serialize_expires_at(self, value: datetime) -> str:
+        utc_value = value.astimezone(UTC)
+        return f"{utc_value.isoformat(timespec='milliseconds').removesuffix('+00:00')}Z"

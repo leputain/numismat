@@ -14,6 +14,23 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe("SameOriginApiClient", () => {
+  it("reads bounded JSON when a WebView does not expose a response stream", async () => {
+    const payload = {
+      authenticated: true,
+      base_currency: "RUB",
+      expires_at: "2026-08-20T11:00:00.123Z",
+      locale: "ru_RU",
+      timezone: "Europe/Moscow",
+    };
+    const response = jsonResponse(payload);
+    Object.defineProperty(response, "body", { value: undefined });
+    const client = new SameOriginApiClient({ fetch: vi.fn<typeof fetch>().mockResolvedValue(response) });
+
+    await expect(
+      client.postAuthentication("/api/v1/auth/telegram", { initData: "opaque" }),
+    ).resolves.toEqual(payload);
+  });
+
   it("uses the fixed same-origin boundary and preserves key across a changed-CSRF retry", async () => {
     const cookieValues = [FIRST_CSRF, SECOND_CSRF];
     const fetchMock = vi

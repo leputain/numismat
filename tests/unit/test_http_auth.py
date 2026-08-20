@@ -350,7 +350,7 @@ async def test_auth_login_me_logout_lifecycle_and_cookie_flags() -> None:
     assert login.json() == {
         "authenticated": True,
         "base_currency": "RUB",
-        "expires_at": "2026-08-13T13:00:00Z",
+        "expires_at": "2026-08-13T13:00:00.000Z",
         "locale": "ru_RU",
         "timezone": "Europe/Moscow",
     }
@@ -407,6 +407,23 @@ async def test_auth_login_me_logout_lifecycle_and_cookie_flags() -> None:
         assert response.headers["cache-control"] == "no-store, no-cache"
         assert response.headers["pragma"] == "no-cache"
         assert response.headers["referrer-policy"] == "no-referrer"
+
+
+@pytest.mark.asyncio
+async def test_auth_session_expiry_is_portable_rfc3339_milliseconds() -> None:
+    precise_now = NOW.replace(microsecond=123_456)
+    owner = AuthOwner(uuid7(), "ru_RU", "Europe/Moscow", "RUB")
+    persistence = FakeAuthPersistence(owner)
+
+    async with _client(_auth_app(persistence, now=precise_now)) as client:
+        response = await client.post(
+            "/api/v1/auth/telegram",
+            headers={"Origin": ORIGIN},
+            json={"initData": _signed_init_data(auth_date=int(precise_now.timestamp()))},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["expires_at"] == "2026-08-13T13:00:00.123Z"
 
 
 @pytest.mark.asyncio

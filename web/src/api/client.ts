@@ -131,38 +131,51 @@ async function readBoundedJson(response: Response): Promise<unknown> {
       throw new ProtocolError();
     }
   }
-  if (response.body === null) {
-    throw new ProtocolError();
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      size += value.byteLength;
-      if (size > MAX_JSON_RESPONSE_BYTES) {
-        await reader.cancel();
+  const stream = response.body;
+  let bytes: Uint8Array;
+  if (stream === null || typeof stream?.getReader !== "function") {
+    try {
+      const buffered = await response.arrayBuffer();
+      if (buffered.byteLength > MAX_JSON_RESPONSE_BYTES) {
         throw new ProtocolError();
       }
-      chunks.push(value);
+      bytes = new Uint8Array(buffered);
+    } catch (error) {
+      if (error instanceof ProtocolError) {
+        throw error;
+      }
+      throw new ProtocolError();
     }
-  } catch (error) {
-    if (error instanceof ProtocolError) {
-      throw error;
+  } else {
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        size += value.byteLength;
+        if (size > MAX_JSON_RESPONSE_BYTES) {
+          await reader.cancel();
+          throw new ProtocolError();
+        }
+        chunks.push(value);
+      }
+    } catch (error) {
+      if (error instanceof ProtocolError) {
+        throw error;
+      }
+      throw new ProtocolError();
     }
-    throw new ProtocolError();
-  }
 
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
+    bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
   }
   try {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
