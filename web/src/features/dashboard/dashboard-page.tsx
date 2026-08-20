@@ -9,95 +9,83 @@ import type {
   PeriodReportResponse,
 } from "../../shared/api/types";
 import { useSessionFormat } from "../../shared/auth/use-session-format";
-import { EmptyState, ErrorState, PageSkeleton } from "../../shared/components/async-state";
+import { EmptyState, ErrorState } from "../../shared/components/async-state";
 import { PageHeading } from "../../shared/components/page-heading";
 import { formatExclusivePeriod } from "../../shared/format/date-time";
-import { formatMoney, moneyMagnitude } from "../../shared/finance/money";
 import { emitClientEvent } from "../../shared/logging/client-events";
 import { queryKeys } from "../../shared/queries/query-keys";
+import {
+  CategoryShareList,
+  MonthlySummaryCards,
+  PeriodTotalsCards,
+} from "../analytics/analytics-insights";
 import { TransactionCard } from "../transactions/transaction-card";
 
-type Totals = DashboardResponse["current_period"]["totals"];
-type CategoryTotal = DashboardResponse["top_categories"][number];
+const QUICK_ACTIONS = [
+  { to: "/draft", icon: "+", label: "Добавить", description: "Новая операция", primary: true },
+  { to: "/transactions", icon: "≡", label: "История", description: "Все записи", primary: false },
+  { to: "/analytics", icon: "⌁", label: "Аналитика", description: "Динамика", primary: false },
+  { to: "/budgets", icon: "◎", label: "Бюджеты", description: "Лимиты", primary: false },
+] as const;
 
-function CurrencyTotals({ totals, compact = false }: { readonly totals: Totals; readonly compact?: boolean }) {
-  const { locale } = useSessionFormat();
-  if (totals.length === 0) {
-    return <p className="text-sm text-stone-500">За период движений нет.</p>;
-  }
+function DashboardSkeleton() {
   return (
-    <div className={compact ? "summary-grid summary-grid--compact" : "summary-grid"}>
-      {totals.map((total) => (
-        <article className="summary-card" key={total.currency}>
-          <div className="summary-card__heading">
-            <span className="summary-card__currency">{total.currency}</span>
-            <span className="summary-card__net-label">Баланс периода</span>
-          </div>
-          <p className="summary-card__net">{formatMoney(total.net_minor, total.currency, locale)}</p>
-          <dl className="summary-card__split">
-            <div>
-              <dt>Доход</dt>
-              <dd className="money-income">{formatMoney(total.income_minor, total.currency, locale)}</dd>
-            </div>
-            <div>
-              <dt>Расход</dt>
-              <dd className="money-expense">{formatMoney(total.expense_minor, total.currency, locale)}</dd>
-            </div>
-          </dl>
-        </article>
-      ))}
+    <div aria-busy="true" aria-label="Загрузка обзора" className="page-stack" role="status">
+      <div className="skeleton h-20 w-full" />
+      <div className="quick-actions">
+        {QUICK_ACTIONS.map((action) => (
+          <div className="skeleton h-20 w-full" key={action.to} />
+        ))}
+      </div>
+      <div className="summary-grid">
+        <div className="skeleton h-48 w-full" />
+        <div className="skeleton h-48 w-full" />
+      </div>
+      <div className="skeleton h-72 w-full" />
+      <span className="sr-only">Собираем обзор…</span>
     </div>
   );
 }
 
-function categoryGroups(categories: CategoryTotal[]): Array<[string, CategoryTotal[]]> {
-  const groups = new Map<string, CategoryTotal[]>();
-  for (const category of categories) {
-    const items = groups.get(category.currency) ?? [];
-    items.push(category);
-    groups.set(category.currency, items);
-  }
-  return [...groups.entries()];
-}
-
-function CategoryBars({ categories }: { readonly categories: CategoryTotal[] }) {
-  const { locale } = useSessionFormat();
-  if (categories.length === 0) {
-    return <EmptyState title="Пока без лидеров">Категории появятся после первых операций периода.</EmptyState>;
-  }
+function TodaySection({ report }: { readonly report: ReturnType<typeof useQuery<PeriodReportResponse>> }) {
+  const { locale, timeZone } = useSessionFormat();
   return (
-    <div className="space-y-6">
-      {categoryGroups(categories).map(([currency, items]) => {
-        const maximum = items.reduce(
-          (current, item) => {
-            const amount = moneyMagnitude(item.amount_minor);
-            return amount > current ? amount : current;
-          },
-          0n,
-        );
-        return (
-          <section aria-labelledby={`categories-${currency}`} key={currency}>
-            <h3 className="section-kicker" id={`categories-${currency}`}>{currency}</h3>
-            <div className="category-bars">
-              {items.map((item) => {
-                const width = maximum === 0n ? 0 : Number((moneyMagnitude(item.amount_minor) * 100n) / maximum);
-                return (
-                  <div className="category-bar" key={`${item.currency}:${item.category_id}`}>
-                    <div className="category-bar__label">
-                      <span><span aria-hidden="true">{item.emoji}</span> {item.name}</span>
-                      <span>{formatMoney(item.amount_minor, item.currency, locale)}</span>
-                    </div>
-                    <div aria-hidden="true" className="category-bar__track">
-                      <span className="category-bar__fill" style={{ width: `${String(width)}%` }} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        );
-      })}
-    </div>
+    <section aria-labelledby="today-title" className="surface-panel today-panel">
+      <div className="section-heading section-heading--inside">
+        <div>
+          <p className="eyebrow">Короткий срез</p>
+          <h2 className="section-title" id="today-title">Сегодня</h2>
+        </div>
+        {report.data === undefined ? null : (
+          <span className="period-caption">
+            {formatExclusivePeriod(
+              report.data.period.start,
+              report.data.period.end,
+              locale,
+              timeZone,
+            )}
+          </span>
+        )}
+      </div>
+      {report.isPending ? (
+        <div aria-busy="true" aria-label="Загрузка данных за сегодня" className="today-grid" role="status">
+          <div className="skeleton h-24 w-full" />
+          <span className="sr-only">Загружаем данные за сегодня…</span>
+        </div>
+      ) : report.isError ? (
+        <div className="inline-state" role="alert">
+          <div>
+            <strong>Срез за сегодня не загрузился</strong>
+            <span>Остальной обзор доступен.</span>
+          </div>
+          <button className="button button--secondary" onClick={() => void report.refetch()} type="button">
+            Повторить
+          </button>
+        </div>
+      ) : (
+        <PeriodTotalsCards totals={report.data.period.totals} />
+      )}
+    </section>
   );
 }
 
@@ -121,18 +109,11 @@ export function DashboardPage() {
 
   useEffect(() => emitClientEvent("dashboard_opened"), []);
 
-  if (dashboard.isPending || today.isPending) {
-    return <PageSkeleton rows={4} />;
+  if (dashboard.isPending) {
+    return <DashboardSkeleton />;
   }
-  if (dashboard.isError || today.isError) {
-    return (
-      <ErrorState
-        onAction={() => {
-          void dashboard.refetch();
-          void today.refetch();
-        }}
-      />
-    );
+  if (dashboard.isError) {
+    return <ErrorState onAction={() => void dashboard.refetch()} />;
   }
 
   const current = dashboard.data.current_period;
@@ -140,33 +121,43 @@ export function DashboardPage() {
   return (
     <div className="page-stack">
       <PageHeading
+        action={
+          <Link className="button button--primary" to="/draft">
+            <span aria-hidden="true">＋</span> Записать
+          </Link>
+        }
         description={formatExclusivePeriod(current.start, current.end, locale, timeZone)}
-        eyebrow="Текущий месяц"
-        title="Финансы без шума"
+        eyebrow="Личные финансы"
+        title="Обзор"
       />
 
-      {activeDraft.data?.draft === null || activeDraft.data === undefined ? null : (
+      {activeDraft.data?.draft == null ? null : (
         <Link className="draft-banner" to="/draft">
           <span aria-hidden="true" className="draft-banner__icon">✦</span>
           <span className="min-w-0 flex-1">
-            <strong>Есть незавершённый черновик</strong>
-            <span>Продолжить с актуальной ревизии</span>
+            <strong>Черновик ждёт проверки</strong>
+            <span>Продолжить с сохранённого шага</span>
           </span>
           <span aria-hidden="true">›</span>
         </Link>
       )}
 
-      <section aria-labelledby="today-title">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Живой срез</p>
-            <h2 className="section-title" id="today-title">Сегодня</h2>
-          </div>
-          <span className="period-caption">
-            {formatExclusivePeriod(today.data.period.start, today.data.period.end, locale, timeZone)}
-          </span>
+      <section aria-label="Быстрые действия">
+        <div className="quick-actions">
+          {QUICK_ACTIONS.map((action) => (
+            <Link
+              className={`quick-action${action.primary ? " quick-action--primary" : ""}`}
+              key={action.to}
+              to={action.to}
+            >
+              <span aria-hidden="true" className="quick-action__icon">{action.icon}</span>
+              <span>
+                <strong>{action.label}</strong>
+                <small>{action.description}</small>
+              </span>
+            </Link>
+          ))}
         </div>
-        <CurrencyTotals compact totals={today.data.period.totals} />
       </section>
 
       <section aria-labelledby="month-title">
@@ -175,22 +166,23 @@ export function DashboardPage() {
             <p className="eyebrow">По валютам отдельно</p>
             <h2 className="section-title" id="month-title">Итоги месяца</h2>
           </div>
-          <span className="period-caption">
-            Предыдущий: {formatExclusivePeriod(comparable.start, comparable.end, locale, timeZone)}
-          </span>
+          <Link className="text-link" to="/analytics">Подробнее</Link>
         </div>
-        <CurrencyTotals totals={current.totals} />
+        <MonthlySummaryCards comparable={comparable} current={current} />
       </section>
+
+      <TodaySection report={today} />
 
       <div className="dashboard-columns">
         <section aria-labelledby="categories-title" className="surface-panel">
           <div className="section-heading section-heading--inside">
             <div>
-              <p className="eyebrow">Структура</p>
-              <h2 className="section-title" id="categories-title">Крупные категории</h2>
+              <p className="eyebrow">Главные траты</p>
+              <h2 className="section-title" id="categories-title">Категории</h2>
             </div>
+            <Link className="text-link" to="/analytics">Аналитика</Link>
           </div>
-          <CategoryBars categories={dashboard.data.top_categories} />
+          <CategoryShareList categories={dashboard.data.top_categories} totals={current.totals} />
         </section>
 
         <section aria-labelledby="recent-title" className="surface-panel">
@@ -202,7 +194,10 @@ export function DashboardPage() {
             <Link className="text-link" to="/transactions">Все</Link>
           </div>
           {dashboard.data.recent_transactions.length === 0 ? (
-            <EmptyState title="История чиста">Создайте первую операцию через проверяемый черновик.</EmptyState>
+            <EmptyState title="История пока пуста">
+              <p>Первая подтверждённая операция появится здесь.</p>
+              <Link className="button button--primary mt-5" to="/draft">Добавить запись</Link>
+            </EmptyState>
           ) : (
             <div className="transaction-list transaction-list--panel">
               {dashboard.data.recent_transactions.map((transaction) => (

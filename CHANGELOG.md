@@ -44,10 +44,12 @@
 - добавлена миграция `0007_http_security_state`: bounded web sessions и HTTP idempotency хранят только keyed digests,
   используют transaction-external repositories, cleanup indexes, fail-closed downgrade и проверенные runtime grants;
 - реализован owner-only Telegram Mini App auth: строгая проверка bounded raw `initData`/`auth_date`, retained replay
-  denial по verified Telegram hash, одночасовые opaque host-only Secure cookies, exact-Origin/double-submit CSRF,
-  атомарный logout и privacy-safe fixed auth outcomes без production bypass;
+  denial по verified Telegram hash, одночасовые opaque host-only Secure cookies и double-submit CSRF; нестабильный
+  native WebView Origin принимается только как optional bounded metadata, атомарный logout и production bypass
+  отсутствуют;
 - реализован owner-scoped HTTP finance read API: month-to-date dashboard, bounded period/comparison reports,
-  transaction detail и active keyset pagination; money передаётся decimal strings, cursor owner-bound/HMAC-signed,
+  owner-local day/week/month timeseries, transaction detail и active keyset pagination; money передаётся decimal
+  strings, cursor owner-bound/HMAC-signed,
   а auth и все запросы одного ответа используют `READ ONLY REPEATABLE READ` snapshot;
 - реализован revision-safe owner-scoped HTTP mutation API для draft lifecycle и repeat/edit-draft/delete/restore:
   creation остаётся review-first без direct transaction-create route, public draft projection не раскрывает payload,
@@ -65,8 +67,9 @@
   теперь проверяет hashed runtime graph из `uv.lock`, не текущее случайное окружение;
 - создан exact-pinned React/Vite/Tailwind/TanStack Query frontend foundation с BrowserRouter, deterministic
   OpenAPI-to-TypeScript generation/drift check, SHA-pinned CI и source-map-free production build;
-- реализован authenticated Mini App shell и finance UI: same-origin cookie/CSRF client, dashboard, history/detail,
-  trash и revision-safe shared draft flow без хранения `initData` или финансовой telemetry;
+- реализован authenticated Mini App shell и finance UI: same-origin cookie/CSRF client, mobile-first overview,
+  currency-isolated analytics с точным дневным SVG-графиком, history/detail, trash и revision-safe shared draft flow
+  без хранения `initData` или финансовой telemetry;
 - добавлен owner-only per-chat Mini App menu с fail-closed запретом глобального Main Mini App и ленивым retry после
   первого private `/start`/`/menu`;
 - добавлен pinned non-root TLS web edge с immutable assets, BrowserRouter fallback, CSP/security/cache headers,

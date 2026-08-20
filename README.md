@@ -24,9 +24,9 @@
 - расходы, доходы, счета, категории, история, редактирование, корзина, restore и audit-based `/undo`;
 - локальный Tesseract `rus+eng`: один чек или очередь до 20 явно проверяемых операций без bulk-save;
 - детерминированные правила категоризации только после согласия владельца;
-- отчёты за день и месяц, сравнение периодов и расходы по категориям;
+- отчёты за день и месяц, сравнение периодов, расходы по категориям и owner-local временной ряд;
 - CSV UTF-8 with BOM с защитой от spreadsheet formulas;
-- owner-only Telegram Mini App с dashboard, историей и общим review-first draft;
+- owner-only Telegram Mini App с мобильным обзором, аналитикой, историей и общим review-first draft;
 - бюджеты расходов с явным периодом и прогрессом только в собственной валюте, без скрытого FX;
 - регулярные daily/weekly/monthly расписания, которые создают только review-черновики, а не операции;
 - ручные неизменяемые версии валютных курсов и отчёты, привязанные к явно выбранной версии;
@@ -134,8 +134,9 @@ idempotency только с keyed digests. Реализованы owner-only Tel
 session/CSRF защита с bounded optional Origin metadata, retained proof replay denial и logout с транзакционной
 блокировкой.
 
-HTTP read API уже включает month-to-date dashboard, bounded period/comparison reports, owner-scoped transaction
-detail и active keyset pagination. Все суммы передаются decimal strings, коллекции имеют жёсткие пределы, а auth и
+HTTP read API уже включает month-to-date dashboard, bounded period/comparison reports, owner-local day/week/month
+timeseries, owner-scoped transaction detail и active keyset pagination. Все суммы передаются decimal strings,
+коллекции имеют жёсткие пределы, а auth и
 составной read выполняются в одной `READ ONLY REPEATABLE READ` транзакции. Подписанный cursor нельзя подделать, но
 он не зашифрован; после изменения операции клиент должен начать live-pagination заново. Draft/transaction mutations
 реализованы owner-only и revision-safe: active/get/create/update/confirm/cancel/resume/replace работают через общий
@@ -147,7 +148,9 @@ endpoint нет — новая и повторяемая операция поя
 но жёстко ограниченные списки счетов и категорий, а все create/archive/restore paths — включая Telegram draft input —
 сохраняют лимит под owner lock. `/reports/today` строит границы по timezone владельца; `make openapi` атомарно создаёт
 детерминированный самодостаточный контракт без доступа к БД или secrets. Exact-pinned React/Vite Mini App использует
-generated OpenAPI contract, cookie/CSRF shell, общие draft/revision контракты и same-origin production edge.
+generated OpenAPI contract, cookie/CSRF shell, общие draft/revision контракты и same-origin production edge. Мобильный
+интерфейс разделяет обзор, операции, аналитику и редкие инструменты; суммы, доли и график считаются отдельно по каждой
+валюте без неявного FX.
 
 Alembic `0009` добавляет owner-scoped recurring schedules и уникальные due instances. Отдельный DB-only
 `recurring-runner` за один bounded tick материализует максимум 32 due-точки и ставит не более одного review-draft

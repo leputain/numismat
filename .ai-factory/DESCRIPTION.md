@@ -100,8 +100,9 @@ The `0.45.0` baseline includes the core finance workflow, persistent drafts, opt
 The current unreleased M0/M1 foundation is implemented: shared use cases are tested through deterministic fakes, PostgreSQL repositories return application DTOs, drafts are channel-neutral, Telegram presentation state is revision-safe, and all current Telegram handler families route through focused controllers/routers and the atomic mutation/outbox envelope. The complete handoff gate passed on the checked-out tree, including unit/integration tests, dependency audit, Compose validation, production image build, and the synthetic encrypted backup/restore drill. No production deployment was performed.
 
 M2-M4 are implemented through the current Task27 scope. The checkout contains the owner-only FastAPI/Mini App
-surface, exact-Origin/CSRF/session/idempotency controls, bounded finance/catalog/budget reads and revision-safe writes,
+surface, bounded WebView-Origin metadata plus CSRF/session/idempotency controls, bounded finance/catalog/budget reads
+and revision-safe writes,
 recurring schedules, explicit exchange rates and staged review-first bank CSV imports through Alembic `0011`.
-The canonical OpenAPI contains 62 path items. Task21 completed the consolidated unit, PostgreSQL/cross-channel,
+The canonical OpenAPI contains 63 path items. Task21 completed the consolidated unit, PostgreSQL/cross-channel,
 migration, dependency, production-image, edge-security and encrypted recovery gates; no production deployment was
 performed.

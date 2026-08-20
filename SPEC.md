@@ -133,11 +133,13 @@ CSV содержит все активные операции и колонки:
 
 Versioned `/api/v1` использует проверенный Telegram Mini App `initData` только для выдачи одночасовой opaque
 cookie-session exact configured owner. HMAC проверяется до разбора identity; signed proof нельзя повторить. Protected
-mutation требует exact HTTPS Origin, host-only session cookie, double-submit CSRF и canonical owner-wide
-`Idempotency-Key`. Session lock, owner lock, idempotency claim, domain write и completion принадлежат одной транзакции.
+mutation требует host-only session cookie, double-submit CSRF и canonical owner-wide `Idempotency-Key`; один bounded
+ASCII Origin, если WebView его передал, остаётся только transport metadata. Session lock, owner lock, idempotency claim,
+domain write и completion принадлежат одной транзакции.
 
-Read API содержит dashboard, today/period/comparison reports, active transaction keyset list, owner-scoped detail и
-complete-but-bounded accounts/categories. Minor units передаются decimal strings. Multi-query reads используют один
+Read API содержит dashboard, today/period/comparison reports, bounded owner-local day/week/month timeseries, active
+transaction keyset list, owner-scoped detail и complete-but-bounded accounts/categories. Minor units передаются
+decimal strings. Multi-query reads используют один
 `READ ONLY REPEATABLE READ` snapshot; collection overflow завершается fail closed, а не silent truncation.
 
 Recurring HTTP API использует тот же auth/CSRF/idempotency UoW. Списки schedules/instances ограничены 50 элементами,
@@ -160,8 +162,9 @@ canonical JSON без environment, secrets, database или network access; Swag
 ## Telegram Mini App UI и запуск
 
 React Mini App использует только same-origin `/api/v1`: raw Telegram `initData` передаётся ровно один раз в auth POST
-и не попадает в storage, URL или telemetry. После cookie bootstrap доступны dashboard, today/month summary, active
-transaction history/detail, trash и единый persistent draft review/create/edit/repeat flow. Любая новая transaction
+и не попадает в storage, URL или telemetry. После cookie bootstrap доступны mobile-first overview,
+currency-isolated analytics/timeseries, today/month summary, active transaction history/detail, trash и единый
+persistent draft review/create/edit/repeat flow. Любая новая transaction
 по-прежнему появляется только через явный confirm; Telegram и HTTP разделяют один draft UUID/revision.
 
 Launch button устанавливается Bot API только для exact numeric owner private chat. Default menu не открывает Web App,

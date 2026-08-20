@@ -1,6 +1,7 @@
 import { Route, Routes, useParams } from "react-router";
 
 import { DashboardPage } from "../features/dashboard/dashboard-page";
+import { AnalyticsPage } from "../features/analytics/analytics-page";
 import { DraftPage } from "../features/drafts/draft-page";
 import { BankImportDetailPage } from "../features/bank-imports/bank-import-detail-page";
 import { BankImportsPage } from "../features/bank-imports/bank-imports-page";
@@ -16,6 +17,7 @@ import { RecurringEditorPage } from "../features/recurring/recurring-editor-page
 import { RecurringPage } from "../features/recurring/recurring-page";
 import { TransactionDetailPage } from "../features/transactions/transaction-detail-page";
 import { TransactionsPage } from "../features/transactions/transactions-page";
+import { MorePage } from "../features/more/more-page";
 import { RouteErrorState } from "./states/route-error-state";
 import { AppShell } from "./shell/app-shell";
 
@@ -123,6 +125,7 @@ export function AppRoutes() {
     <Routes>
       <Route element={<AppShell />}>
         <Route element={<DashboardPage />} index />
+        <Route element={<AnalyticsPage />} path="analytics" />
         <Route element={<TransactionsPage />} path="transactions" />
         <Route element={<TransactionDetailRoute />} path="transactions/:transactionId" />
         <Route element={<BankImportsPage />} path="imports" />
@@ -141,6 +144,7 @@ export function AppRoutes() {
         <Route element={<ExchangeRateSourceRoute />} path="rates/:sourceId" />
         <Route element={<ExchangeRateVersionRoute />} path="rates/versions/:versionId" />
         <Route element={<DraftPage />} path="draft" />
+        <Route element={<MorePage />} path="more" />
         <Route element={<RouteErrorState />} path="*" />
       </Route>
     </Routes>

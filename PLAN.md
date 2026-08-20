@@ -137,8 +137,9 @@ synthetic encrypted backup/restore. Production deployment не выполнял�
 - [x] Telegram Mini App auth проверяет официальный raw `initData` HMAC, bounded `auth_date` и exact owner, запрещает
   повтор signed proof, выдаёт одночасовую host-only Secure cookie-session, требует session + double-submit CSRF для
   writes и атомарно инвалидирует сессию при logout; Origin из native WebView валидируется как optional bounded metadata.
-- [x] HTTP finance reads дают month-to-date dashboard, bounded period/comparison reports, owner-scoped detail и
-  signed keyset pagination в одной read-only repeatable transaction; money возвращается decimal strings.
+- [x] HTTP finance reads дают month-to-date dashboard, bounded period/comparison reports, owner-local bounded
+  day/week/month timeseries, owner-scoped detail и signed keyset pagination в одной read-only repeatable transaction;
+  money возвращается decimal strings.
 - [x] Revision-safe HTTP draft/transaction mutations реализуют active/get/create/update/confirm/cancel/resume/replace
   и repeat/edit-draft/delete/restore через закрытый typed facade; прямого transaction create без review нет.
 - [x] Shared session lock, owner lock, idempotency claim, domain mutation и completion выполняются одной транзакцией.
@@ -160,8 +161,9 @@ synthetic encrypted backup/restore. Production deployment не выполнял�
   fail-fast очищает временный requirements artifact; сетевой audit выполнен в консолидированном финальном gate.
 - [x] FastAPI lifespan запускает owner-safe bounded cleanup web-session/idempotency rows: advisory singleton,
   `SKIP LOCKED`, максимум 500+500 строк, 10-секундный tick и privacy-safe event/result log.
-- [x] Browser Mini App реализует dashboard, transaction/detail/trash и общий draft review flow; bot устанавливает
-  owner-only per-chat launch menu и fail closed запрещает глобальный BotFather Main Mini App.
+- [x] Browser Mini App реализует mobile-first overview, currency-isolated analytics/timeseries, transaction/detail/trash
+  и общий draft review flow; bot устанавливает owner-only per-chat launch menu и fail closed запрещает глобальный
+  BotFather Main Mini App.
 - [x] Pinned non-root web edge отдаёт source-map-free SPA/immutable assets, same-origin proxy `/api/*`, TLS/CSP/cache
   headers и privacy-safe access log; API остаётся только на internal `api-edge` network.
 - [x] Frontend foundation использует exact-pinned React 19/Vite 8/TypeScript 5/Tailwind 4/TanStack Query 5,
@@ -187,7 +189,7 @@ synthetic encrypted backup/restore. Production deployment не выполнял�
   `float`, keyed digests без raw банковских реквизитов, owner/account-scoped batches/rows, до пяти
   deterministic reconciliation candidates и только явные create-review/link/skip actions. HTTP raw upload,
   Telegram document ingress и Mini App review сохраняют provenance и не создают transaction без confirm;
-  canonical OpenAPI содержит 62 path items. Полный PostgreSQL/cross-channel gate подтверждён Task21.
+  canonical OpenAPI содержит 63 path items. Полный PostgreSQL/cross-channel gate подтверждён Task21.
 - [x] Task21 закрыл единый release gate: backend/frontend static и unit, guarded migrations до Alembic `0011`,
   146 PostgreSQL/cross-channel integration сценариев без skips, production images, edge/TLS/privacy smoke,
   frozen Python/npm dependency audits и encrypted Restic backup/restore drill. Production deployment не выполнялся.

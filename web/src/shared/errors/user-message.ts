@@ -40,9 +40,10 @@ export function userErrorMessage(error: unknown): string {
       return "Проверьте введённое значение и попробуйте снова.";
     case "idempotency_key_conflict":
       return "Запрос нельзя безопасно повторить. Обновите экран и выполните действие заново.";
-    case "forbidden":
     case "origin_forbidden":
-      return "Действие отклонено настройками безопасности.";
+      return "Mini App передал некорректные данные окружения. Полностью закройте и откройте приложение снова.";
+    case "forbidden":
+      return "Действие недоступно для текущего пользователя.";
     default:
       return "Действие не выполнено. Обновите экран и попробуйте снова.";
   }

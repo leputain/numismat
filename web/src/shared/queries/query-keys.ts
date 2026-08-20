@@ -1,6 +1,10 @@
+import type { TimeSeriesGrain } from "../api/types";
+
 export const queryKeys = {
   dashboard: ["dashboard"] as const,
   today: ["reports", "today"] as const,
+  timeseries: (start: string, end: string, grain: TimeSeriesGrain) =>
+    ["reports", "timeseries", { start, end, grain }] as const,
   transactions: {
     all: ["transactions"] as const,
     activeRoot: ["transactions", "active"] as const,

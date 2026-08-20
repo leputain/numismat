@@ -20,6 +20,9 @@ export type DraftAction =
   operations["patch_draft_api_v1_drafts__draft_id__patch"]["requestBody"]["content"]["application/json"];
 export type MutationResponse = Schemas["MutationResponse"];
 export type PeriodReportResponse = Schemas["PeriodReportResponse"];
+export type TimeSeriesResponse = Schemas["TimeSeriesResponse"];
+export type TimeSeriesBucket = Schemas["TimeSeriesBucketResponse"];
+export type TimeSeriesGrain = TimeSeriesResponse["grain"];
 export type Transaction = Schemas["TransactionResponse"];
 export type TransactionPageResponse = Schemas["TransactionPageResponse"];
 export type VersionedBudgetRequest =

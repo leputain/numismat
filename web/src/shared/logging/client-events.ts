@@ -1,4 +1,5 @@
 export type ClientEventCode =
+  | "analytics_opened"
   | "auth_protocol_error"
   | "auth_reopen_required"
   | "bank_import_action_completed"
@@ -20,6 +21,7 @@ export type ClientEventCode =
   | "exchange_rate_action_started"
   | "mutation_conflict_detected"
   | "mutation_outcome_unknown"
+  | "more_opened"
   | "pagination_restarted"
   | "recurring_action_completed"
   | "recurring_action_rejected"
