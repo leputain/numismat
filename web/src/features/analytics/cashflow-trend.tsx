@@ -1,31 +1,40 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 
 import { apiClient } from "../../app/providers";
-import type { TimeSeriesResponse } from "../../shared/api/types";
+import type { DashboardResponse, TimeSeriesResponse } from "../../shared/api/types";
 import { useSessionFormat } from "../../shared/auth/use-session-format";
-import { formatPeriod } from "../../shared/format/date-time";
+import { formatExclusivePeriod, formatPeriod } from "../../shared/format/date-time";
 import { formatMoney } from "../../shared/finance/money";
 import { queryKeys } from "../../shared/queries/query-keys";
+import { formatBasisPoints, savingsRateBasisPoints } from "./analytics-math";
+import {
+  ANALYTICS_PERIOD_OPTIONS,
+  buildAnalyticsPeriod,
+  type AnalyticsPeriodId,
+  type AnalyticsPeriodSpec,
+} from "./analytics-period";
 import {
   buildCashflowSeries,
-  scaleMinorToPixels,
   summarizeCashflow,
   timeSeriesCurrencies,
   type CashflowPoint,
   type CashflowSummary,
 } from "./timeseries-math";
 
-const GRAIN = "day" as const;
-const CHART_WIDTH = 640;
-const CHART_HEIGHT = 224;
-const PLOT_LEFT = 18;
-const PLOT_RIGHT = 622;
-const ZERO_Y = 108;
-const VERTICAL_EXTENT = 82;
+const FinancialCharts = lazy(async () => {
+  const module = await import("./financial-charts");
+  return { default: module.FinancialCharts };
+});
 
-function timeseriesPath(start: string, end: string): string {
-  const query = new URLSearchParams({ start, end, grain: GRAIN });
+type PeriodTotals = DashboardResponse["current_period"];
+
+function timeseriesPath(period: AnalyticsPeriodSpec): string {
+  const query = new URLSearchParams({
+    start: period.currentStart,
+    end: period.currentEnd,
+    grain: period.grain,
+  });
   return `/api/v1/reports/timeseries?${query.toString()}`;
 }
 
@@ -33,142 +42,52 @@ function CashflowSkeleton() {
   return (
     <div aria-busy="true" aria-label="Загрузка денежного потока" className="cashflow-loading" role="status">
       <div className="skeleton h-11 w-full" />
-      <div className="skeleton h-56 w-full" />
-      <div className="cashflow-counts">
-        <div className="skeleton h-16 w-full" />
-        <div className="skeleton h-16 w-full" />
-        <div className="skeleton h-16 w-full" />
+      <div className="analytics-kpis">
+        <div className="analytics-kpi-hero analytics-kpi-hero--skeleton skeleton h-28 w-full" />
+        <div className="analytics-kpi-strip analytics-kpi-strip--skeleton">
+          <div className="skeleton h-20 w-full" />
+          <div className="skeleton h-20 w-full" />
+          <div className="skeleton h-20 w-full" />
+        </div>
       </div>
-      <span className="sr-only">Строим график по дням…</span>
+      <div className="skeleton h-80 w-full" />
+      <div className="skeleton h-44 w-full" />
+      <span className="sr-only">Строим графики…</span>
     </div>
   );
 }
 
-function CashflowChart({
-  currency,
-  points,
-  summary,
-  timeZone,
-}: {
-  readonly currency: string;
-  readonly points: readonly CashflowPoint[];
-  readonly summary: CashflowSummary;
-  readonly timeZone: string;
-}) {
-  const { locale } = useSessionFormat();
-  const plotWidth = PLOT_RIGHT - PLOT_LEFT;
-  const step = plotWidth / Math.max(points.length, 1);
-  const barWidth = Math.min(8, Math.max(2.5, step * 0.28));
-  const netPoints = points
-    .map((point, index) => {
-      const x = PLOT_LEFT + step * (index + 0.5);
-      const y = ZERO_Y - scaleMinorToPixels(point.netMinor, summary.maximumMagnitude, VERTICAL_EXTENT);
-      return `${x.toFixed(2)},${y.toFixed(2)}`;
-    })
-    .join(" ");
-  const middleIndex = Math.floor((points.length - 1) / 2);
-  const axisPoints = [points[0], points[middleIndex], points.at(-1)].filter(
-    (point, index, items): point is CashflowPoint =>
-      point !== undefined && items.findIndex((candidate) => candidate?.start === point.start) === index,
-  );
-
+function ChartsSkeleton() {
   return (
-    <div className="cashflow-chart-frame">
-      <div className="cashflow-legend" aria-label="Обозначения графика">
-        <span><i className="cashflow-legend__income" />Доходы</span>
-        <span><i className="cashflow-legend__expense" />Расходы</span>
-        <span><i className="cashflow-legend__net" />Итог дня</span>
-      </div>
-      <svg
-        aria-labelledby="cashflow-chart-title cashflow-chart-description"
-        className="cashflow-chart"
-        role="img"
-        viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
-      >
-        <title id="cashflow-chart-title">Доходы и расходы по дням, {currency}</title>
-        <desc id="cashflow-chart-description">
-          Доходы направлены вверх от нулевой линии, расходы вниз, а линия показывает разницу за день.
-          Точные значения доступны в таблице под графиком.
-        </desc>
-        <line className="cashflow-chart__grid" x1={PLOT_LEFT} x2={PLOT_RIGHT} y1={ZERO_Y - 41} y2={ZERO_Y - 41} />
-        <line className="cashflow-chart__zero" x1={PLOT_LEFT} x2={PLOT_RIGHT} y1={ZERO_Y} y2={ZERO_Y} />
-        <line className="cashflow-chart__grid" x1={PLOT_LEFT} x2={PLOT_RIGHT} y1={ZERO_Y + 41} y2={ZERO_Y + 41} />
-        {points.map((point, index) => {
-          const center = PLOT_LEFT + step * (index + 0.5);
-          const incomeHeight = scaleMinorToPixels(
-            point.incomeMinor,
-            summary.maximumMagnitude,
-            VERTICAL_EXTENT,
-          );
-          const expenseHeight = scaleMinorToPixels(
-            point.expenseMinor,
-            summary.maximumMagnitude,
-            VERTICAL_EXTENT,
-          );
-          return (
-            <g key={point.start}>
-              {incomeHeight === 0 ? null : (
-                <rect
-                  className="cashflow-chart__income"
-                  height={incomeHeight}
-                  rx={Math.min(2, barWidth / 2)}
-                  width={barWidth}
-                  x={center - barWidth - 1}
-                  y={ZERO_Y - incomeHeight}
-                />
-              )}
-              {expenseHeight === 0 ? null : (
-                <rect
-                  className="cashflow-chart__expense"
-                  height={expenseHeight}
-                  rx={Math.min(2, barWidth / 2)}
-                  width={barWidth}
-                  x={center + 1}
-                  y={ZERO_Y}
-                />
-              )}
-            </g>
-          );
-        })}
-        {netPoints.length === 0 ? null : (
-          <polyline className="cashflow-chart__net" points={netPoints} />
-        )}
-        {points.map((point, index) => {
-          const x = PLOT_LEFT + step * (index + 0.5);
-          const y = ZERO_Y - scaleMinorToPixels(point.netMinor, summary.maximumMagnitude, VERTICAL_EXTENT);
-          return point.netMinor === 0n ? null : (
-            <circle className="cashflow-chart__net-point" cx={x} cy={y} key={point.start} r="2.25" />
-          );
-        })}
-      </svg>
-      <div aria-hidden="true" className="cashflow-axis">
-        {axisPoints.map((point) => (
-          <span key={point.start}>{formatPeriod(point.start, locale, timeZone)}</span>
-        ))}
-      </div>
+    <div aria-busy="true" aria-label="Подготовка интерактивных графиков" className="analytics-charts" role="status">
+      <div className="skeleton h-80 w-full" />
+      <div className="skeleton h-44 w-full" />
     </div>
   );
 }
 
 function CashflowTable({
   currency,
+  grain,
   points,
   timeZone,
 }: {
   readonly currency: string;
+  readonly grain: TimeSeriesResponse["grain"];
   readonly points: readonly CashflowPoint[];
   readonly timeZone: string;
 }) {
   const { locale } = useSessionFormat();
+  const unit = grain === "month" ? "месяцам" : "дням";
   return (
     <details className="cashflow-table-details">
-      <summary>Точные значения по дням</summary>
+      <summary>Точные значения по {unit}</summary>
       <div className="cashflow-table-scroll">
         <table className="cashflow-table">
-          <caption className="sr-only">Доходы и расходы по дням в валюте {currency}</caption>
+          <caption className="sr-only">Доходы и расходы по {unit} в валюте {currency}</caption>
           <thead>
             <tr>
-              <th scope="col">Дата</th>
+              <th scope="col">Период</th>
               <th scope="col">Доходы</th>
               <th scope="col">Расходы</th>
               <th scope="col">Итог</th>
@@ -194,7 +113,70 @@ function CashflowTable({
   );
 }
 
-function CashflowContent({ response }: { readonly response: TimeSeriesResponse }) {
+function CashflowKpis({
+  currency,
+  summary,
+}: {
+  readonly currency: string;
+  readonly summary: CashflowSummary;
+}) {
+  const { locale } = useSessionFormat();
+  const savingsRate = savingsRateBasisPoints(
+    summary.incomeMinor.toString(),
+    summary.expenseMinor.toString(),
+  );
+  const totalOperations = summary.incomeCount + summary.expenseCount;
+  return (
+    <div className="analytics-kpis">
+      <article aria-label="Итог выбранного периода" className="analytics-kpi-hero">
+        <span className="analytics-kpi-hero__label">Итог периода</span>
+        <strong className="analytics-kpi-hero__value">
+          {formatMoney(summary.netMinor.toString(), currency, locale)}
+        </strong>
+        <small className="analytics-kpi-hero__caption">Доходы минус расходы</small>
+      </article>
+      <dl aria-label="Показатели выбранного периода" className="analytics-kpi-strip">
+        <div className="analytics-kpi-metric analytics-kpi-metric--income">
+          <dt>Доходы</dt>
+          <dd className="analytics-kpi-metric__value">
+            {formatMoney(summary.incomeMinor.toString(), currency, locale)}
+          </dd>
+          <dd className="analytics-kpi-metric__meta">
+            <small>{summary.incomeCount} подтверждённых операций</small>
+          </dd>
+        </div>
+        <div className="analytics-kpi-metric analytics-kpi-metric--expense">
+          <dt>Расходы</dt>
+          <dd className="analytics-kpi-metric__value">
+            {formatMoney(summary.expenseMinor.toString(), currency, locale)}
+          </dd>
+          <dd className="analytics-kpi-metric__meta">
+            <small>{summary.expenseCount} подтверждённых операций</small>
+          </dd>
+        </div>
+        <div className="analytics-kpi-metric analytics-kpi-metric--savings">
+          <dt>Остаток от доходов</dt>
+          <dd className="analytics-kpi-metric__value">
+            {savingsRate === null ? "—" : formatBasisPoints(savingsRate)}
+          </dd>
+          <dd className="analytics-kpi-metric__meta">
+            <small>
+              {savingsRate === null ? "Появится после дохода" : `${totalOperations} операций всего`}
+            </small>
+          </dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+function CashflowContent({
+  period,
+  response,
+}: {
+  readonly period: AnalyticsPeriodSpec;
+  readonly response: TimeSeriesResponse;
+}) {
   const { locale } = useSessionFormat();
   const currencies = useMemo(() => timeSeriesCurrencies(response.buckets), [response.buckets]);
   const [requestedCurrency, setRequestedCurrency] = useState("");
@@ -211,26 +193,32 @@ function CashflowContent({ response }: { readonly response: TimeSeriesResponse }
     return (
       <div className="cashflow-empty">
         <span aria-hidden="true">⌁</span>
-        <strong>В этом месяце пока нет движения</strong>
-        <p>График появится после первой подтверждённой операции.</p>
+        <strong>За выбранный период движения пока нет</strong>
+        <p>Графики появятся после первой подтверждённой операции.</p>
       </div>
     );
   }
 
   return (
     <div className="cashflow-content">
-      <div aria-label="Валюта графика" className="currency-chips" role="group">
-        {currencies.map((currency) => (
-          <button
-            aria-pressed={currency === selectedCurrency}
-            className="currency-chip"
-            key={currency}
-            onClick={() => setRequestedCurrency(currency)}
-            type="button"
-          >
-            {currency}
-          </button>
-        ))}
+      <div className="analytics-range-summary">
+        <div aria-label="Валюта графиков" className="currency-chips" role="group">
+          {currencies.map((currency) => (
+            <button
+              aria-pressed={currency === selectedCurrency}
+              className="currency-chip"
+              key={currency}
+              onClick={() => setRequestedCurrency(currency)}
+              type="button"
+            >
+              {currency}
+            </button>
+          ))}
+        </div>
+        <p aria-live="polite" className="analytics-range-caption">
+          {formatExclusivePeriod(response.period.start, response.period.end, locale, response.timezone)}
+          <span>{period.shortDescription}</span>
+        </p>
       </div>
 
       {summary.incomeCount + summary.expenseCount === 0 ? (
@@ -241,36 +229,30 @@ function CashflowContent({ response }: { readonly response: TimeSeriesResponse }
         </div>
       ) : (
         <>
-          <div className="cashflow-totals">
-            <div>
-              <span>Доходы</span>
-              <strong className="money-income">{formatMoney(summary.incomeMinor.toString(), selectedCurrency, locale)}</strong>
-            </div>
-            <div>
-              <span>Расходы</span>
-              <strong className="money-expense">{formatMoney(summary.expenseMinor.toString(), selectedCurrency, locale)}</strong>
-            </div>
-            <div>
-              <span>Итог периода</span>
-              <strong>{formatMoney(summary.netMinor.toString(), selectedCurrency, locale)}</strong>
-            </div>
-          </div>
+          <CashflowKpis currency={selectedCurrency} summary={summary} />
 
-          <CashflowChart
-            currency={selectedCurrency}
-            points={points}
-            summary={summary}
-            timeZone={response.timezone}
-          />
+          <Suspense fallback={<ChartsSkeleton />}>
+            <FinancialCharts
+              currency={selectedCurrency}
+              grain={response.grain}
+              locale={locale}
+              points={points}
+              timeZone={response.timezone}
+            />
+          </Suspense>
 
-          <div className="cashflow-counts" aria-label="Количество операций в периоде">
-            <div><span>Доходов</span><strong>{summary.incomeCount}</strong></div>
-            <div><span>Расходов</span><strong>{summary.expenseCount}</strong></div>
-            <div><span>Дней с движением</span><strong>{summary.activeDays}</strong></div>
+          <div className="cashflow-counts" aria-label="Активность в выбранном периоде">
+            <div><span>Доходных операций</span><strong>{summary.incomeCount}</strong></div>
+            <div><span>Расходных операций</span><strong>{summary.expenseCount}</strong></div>
+            <div>
+              <span>{response.grain === "month" ? "Месяцев" : "Дней"} с движением</span>
+              <strong>{summary.activeDays}</strong>
+            </div>
           </div>
 
           <CashflowTable
             currency={selectedCurrency}
+            grain={response.grain}
             points={points}
             timeZone={response.timezone}
           />
@@ -280,40 +262,80 @@ function CashflowContent({ response }: { readonly response: TimeSeriesResponse }
   );
 }
 
-export function CashflowTrend({ start, end }: { readonly start: string; readonly end: string }) {
+export function CashflowTrend({
+  comparable,
+  current,
+  timeZone,
+}: {
+  readonly comparable: PeriodTotals;
+  readonly current: PeriodTotals;
+  readonly timeZone: string;
+}) {
+  const [periodId, setPeriodId] = useState<AnalyticsPeriodId>("month");
+  const period = useMemo(
+    () =>
+      buildAnalyticsPeriod(periodId, {
+        currentStart: current.start,
+        currentEnd: current.end,
+        comparableStart: comparable.start,
+        comparableEnd: comparable.end,
+        timeZone,
+      }),
+    [comparable.end, comparable.start, current.end, current.start, periodId, timeZone],
+  );
   const timeseries = useQuery({
-    queryKey: queryKeys.timeseries(start, end, GRAIN),
+    queryKey: queryKeys.timeseries(period.currentStart, period.currentEnd, period.grain),
     queryFn: ({ signal }) =>
-      apiClient.get<TimeSeriesResponse>(timeseriesPath(start, end), { signal }),
+      apiClient.get<TimeSeriesResponse>(timeseriesPath(period), { signal }),
     staleTime: 30_000,
   });
 
   return (
     <section
       aria-labelledby="cashflow-title"
-      className="surface-panel surface-panel--roomy cashflow-section"
+      className="cashflow-section analytics-cashflow"
     >
-      <div className="section-heading section-heading--inside">
+      <div className="section-heading analytics-cashflow__heading">
         <div>
-          <p className="eyebrow">Движение внутри месяца</p>
-          <h2 className="section-title" id="cashflow-title">Доходы и расходы по дням</h2>
+          <p className="eyebrow">Динамика бюджета</p>
+          <h2 className="section-title" id="cashflow-title">Движение за период</h2>
+          <p className="section-description">
+            Выберите горизонт и валюту. Коснитесь столбца или точки, чтобы увидеть точные суммы.
+          </p>
         </div>
-        <span className="period-caption">Текущий месяц</span>
       </div>
+
+      <div className="analytics-toolbar">
+        <div aria-label="Период аналитики" className="analytics-period-tabs" role="group">
+          {ANALYTICS_PERIOD_OPTIONS.map((option) => (
+            <button
+              aria-pressed={periodId === option.id}
+              className="analytics-period-tab"
+              key={option.id}
+              onClick={() => setPeriodId(option.id)}
+              type="button"
+            >
+              <strong>{option.label}</strong>
+              <span>{option.shortDescription}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {timeseries.isPending ? (
         <CashflowSkeleton />
       ) : timeseries.isError ? (
         <div className="inline-state" role="alert">
           <div>
-            <strong>График не загрузился</strong>
-            <span>Остальная аналитика доступна.</span>
+            <strong>Графики не загрузились</strong>
+            <span>Смените период или повторите запрос. Остальная аналитика доступна.</span>
           </div>
           <button className="button button--secondary" onClick={() => void timeseries.refetch()} type="button">
             Повторить
           </button>
         </div>
       ) : (
-        <CashflowContent response={timeseries.data} />
+        <CashflowContent period={period} response={timeseries.data} />
       )}
     </section>
   );

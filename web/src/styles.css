@@ -19,20 +19,23 @@
   --tg-content-safe-area-right: env(safe-area-inset-right, 0px);
   --tg-content-safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --tg-content-safe-area-left: env(safe-area-inset-left, 0px);
-  --nm-canvas: var(--tg-theme-bg-color, #071012);
-  --nm-surface: var(--tg-theme-secondary-bg-color, #0c1517);
-  --nm-raised: var(--tg-theme-section-bg-color, var(--tg-theme-secondary-bg-color, #111b1d));
-  --nm-text: var(--tg-theme-text-color, #f4f2ed);
-  --nm-muted: var(--tg-theme-hint-color, #929b9b);
-  --nm-line: color-mix(in srgb, var(--nm-text) 10%, transparent);
-  --nm-accent: var(--tg-theme-button-color, #d7ba77);
-  --nm-accent-text: var(--tg-theme-button-text-color, #17130c);
-  --nm-income: color-mix(in srgb, #3d8a71 80%, var(--nm-text));
-  --nm-expense: color-mix(in srgb, #b65e45 82%, var(--nm-text));
-  --nm-danger: color-mix(in srgb, #bd4e49 82%, var(--nm-text));
-  --nm-focus: #f3d896;
-  --nm-shadow-soft: 0 1rem 3rem rgb(0 0 0 / 0.1);
-  --nm-shadow-raised: 0 1.25rem 4rem rgb(0 0 0 / 0.18);
+  --nm-canvas: var(--tg-theme-bg-color, #071113);
+  --nm-surface: var(--tg-theme-secondary-bg-color, #0d191b);
+  --nm-raised: var(--tg-theme-section-bg-color, var(--tg-theme-secondary-bg-color, #122124));
+  --nm-text: var(--tg-theme-text-color, #edf7f5);
+  --nm-muted: var(--tg-theme-hint-color, #91a3a3);
+  --nm-line: color-mix(in srgb, var(--nm-text) 9%, transparent);
+  --nm-line-strong: color-mix(in srgb, var(--nm-text) 17%, transparent);
+  --nm-accent: var(--tg-theme-button-color, #59d2c1);
+  --nm-accent-text: var(--tg-theme-button-text-color, #062421);
+  --nm-income: #58d3a6;
+  --nm-expense: #ff8a73;
+  --nm-chart-net: #7ca9ff;
+  --nm-chart-hover: color-mix(in srgb, var(--nm-accent) 7%, transparent);
+  --nm-danger: color-mix(in srgb, #e96862 84%, var(--nm-text));
+  --nm-focus: color-mix(in srgb, var(--nm-accent) 78%, white);
+  --nm-shadow-soft: 0 0.8rem 2.4rem rgb(0 0 0 / 0.08);
+  --nm-shadow-raised: 0 1.25rem 3.5rem rgb(0 0 0 / 0.25);
   color-scheme: var(--nm-color-scheme, dark);
 }
 
@@ -41,8 +44,9 @@
   min-height: var(--tg-viewport-stable-height, 100dvh);
   color: var(--nm-text);
   background:
-    radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--tg-theme-button-color, #2f7670) 18%, transparent), transparent 28rem),
-    var(--tg-theme-bg-color, #071012);
+    radial-gradient(circle at 12% -8%, color-mix(in srgb, var(--nm-accent) 11%, transparent), transparent 26rem),
+    radial-gradient(circle at 98% 8%, color-mix(in srgb, var(--nm-chart-net) 7%, transparent), transparent 24rem),
+    var(--nm-canvas);
 }
 
 .shell-main {
@@ -99,7 +103,7 @@
   background:
     radial-gradient(circle, color-mix(in srgb, var(--nm-accent) 13%, transparent) 0 42%, transparent 44%),
     color-mix(in srgb, var(--nm-surface) 88%, transparent);
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: 1rem;
   box-shadow: inset 0 0 0 0.24rem color-mix(in srgb, var(--nm-accent) 5%, transparent);
 }
@@ -111,8 +115,9 @@
 
 .shell-brand__name {
   color: var(--nm-text);
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: 1.12rem;
+  font-weight: 750;
   letter-spacing: -0.02em;
 }
 
@@ -202,7 +207,7 @@
 .system-state__card h1 {
   margin: 0;
   color: var(--nm-text);
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: clamp(1.7rem, 8vw, 2.35rem);
   font-weight: 500;
   letter-spacing: -0.035em;
@@ -261,7 +266,7 @@
 .route-state h1 {
   margin: 0.5rem 0 0;
   color: var(--nm-text);
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: clamp(1.8rem, 8vw, 2.5rem);
   font-weight: 500;
 }
@@ -302,19 +307,19 @@ button:disabled {
 }
 
 html {
-  min-width: 320px;
+  min-width: 0;
   min-height: 100%;
+  overflow-x: clip;
   background: var(--nm-canvas);
 }
 
 body {
-  min-width: 320px;
+  min-width: 0;
   min-height: 100%;
   margin: 0;
+  overflow-x: clip;
   color: var(--nm-text);
-  background:
-    radial-gradient(circle at 15% 10%, color-mix(in srgb, var(--nm-accent) 8%, transparent), transparent 34rem),
-    var(--nm-canvas);
+  background: var(--nm-canvas);
 }
 
 button,
@@ -337,7 +342,7 @@ select {
   right: -8rem;
   width: 28rem;
   height: 28rem;
-  background: #c6a96b;
+  background: var(--nm-chart-net);
 }
 
 .ambient-two {
@@ -345,12 +350,12 @@ select {
   left: -10rem;
   width: 32rem;
   height: 32rem;
-  background: #2f7670;
+  background: var(--nm-accent);
 }
 
 ::selection {
-  color: #12100a;
-  background: #e6cf9a;
+  color: var(--nm-accent-text);
+  background: var(--nm-accent);
 }
 
 .page-stack {
@@ -503,9 +508,9 @@ select {
 .page-title {
   margin: 0.5rem 0 0;
   color: var(--nm-text);
-  font-family: var(--font-serif);
-  font-size: clamp(2.2rem, 7vw, 3.8rem);
-  font-weight: 500;
+  font-family: var(--font-sans);
+  font-size: clamp(2rem, 8vw, 3.25rem);
+  font-weight: 720;
   letter-spacing: -0.045em;
   line-height: 0.98;
 }
@@ -534,9 +539,9 @@ select {
 .section-title {
   margin: 0.4rem 0 0;
   color: var(--nm-text);
-  font-family: var(--font-serif);
-  font-size: clamp(1.55rem, 5vw, 2rem);
-  font-weight: 500;
+  font-family: var(--font-sans);
+  font-size: clamp(1.25rem, 5vw, 1.75rem);
+  font-weight: 700;
   letter-spacing: -0.025em;
   line-height: 1.08;
 }
@@ -772,7 +777,7 @@ select {
 .today-card__net {
   margin: 0.45rem 0 0.7rem;
   color: var(--nm-text);
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: clamp(1.35rem, 6vw, 1.8rem);
   font-variant-numeric: tabular-nums;
 }
@@ -829,10 +834,10 @@ select {
 }
 
 .analytics-overview {
-  padding: clamp(1rem, 4vw, 1.4rem);
-  border: 1px solid var(--nm-line);
-  border-radius: 1.45rem;
-  background: color-mix(in srgb, var(--nm-surface) 88%, transparent);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .analytics-overview .section-heading {
@@ -844,13 +849,423 @@ select {
 }
 
 .analytics-comparison-card {
-  background:
-    linear-gradient(150deg, color-mix(in srgb, var(--nm-raised) 96%, transparent), color-mix(in srgb, var(--nm-surface) 92%, transparent));
-  box-shadow: var(--nm-shadow-soft);
+  background: var(--nm-surface);
+  box-shadow: none;
 }
 
 .cashflow-section {
+  min-width: 0;
+}
+
+.analytics-cashflow {
+  display: grid;
+  min-width: 0;
+  gap: 1.15rem;
+}
+
+.analytics-cashflow__heading {
+  margin-bottom: 0;
+}
+
+.section-description {
+  max-width: 38rem;
+  margin: 0.4rem 0 0;
+  color: var(--nm-muted);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.analytics-toolbar {
+  padding: 0.25rem;
+  border: 0;
+  border-radius: 1rem;
+  background: var(--nm-surface);
+}
+
+.analytics-period-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.3rem;
+}
+
+.analytics-period-tab {
+  min-width: 0;
+  min-height: 3rem;
+  padding: 0.55rem 0.65rem;
+  border: 0;
+  border-radius: 0.78rem;
+  color: var(--nm-muted);
+  background: transparent;
+  text-align: center;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+
+.analytics-period-tab strong,
+.analytics-period-tab span {
+  display: block;
+}
+
+.analytics-period-tab strong {
+  color: inherit;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.analytics-period-tab span {
   overflow: hidden;
+  margin-top: 0.12rem;
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analytics-period-tab[aria-pressed="true"] {
+  color: var(--nm-accent-text);
+  background: var(--nm-accent);
+  box-shadow: none;
+}
+
+.analytics-range-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+}
+
+.analytics-range-caption {
+  margin: 0;
+  color: var(--nm-text);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  text-align: right;
+}
+
+.analytics-range-caption span {
+  display: block;
+  margin-top: 0.12rem;
+  color: var(--nm-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.analytics-kpis {
+  display: grid;
+  min-width: 0;
+  gap: 0.75rem;
+}
+
+.analytics-kpi-hero {
+  display: grid;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 10.25rem;
+  align-content: center;
+  padding: clamp(1.2rem, 5.5vw, 1.7rem);
+  border: 0;
+  border-radius: 1.45rem;
+  background:
+    radial-gradient(circle at 88% 5%, color-mix(in srgb, var(--nm-chart-net) 18%, transparent), transparent 13rem),
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--nm-accent) 16%, var(--nm-surface)),
+      color-mix(in srgb, var(--nm-chart-net) 10%, var(--nm-surface)) 58%,
+      var(--nm-surface)
+    );
+  box-shadow: 0 1rem 2.75rem rgb(0 0 0 / 0.14);
+}
+
+.analytics-kpi-hero__label,
+.analytics-kpi-hero__value,
+.analytics-kpi-hero__caption {
+  display: block;
+}
+
+.analytics-kpi-hero__label {
+  color: color-mix(in srgb, var(--nm-accent) 72%, var(--nm-text));
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+
+.analytics-kpi-hero__value {
+  overflow-wrap: anywhere;
+  margin-top: 0.7rem;
+  color: var(--nm-text);
+  font-family: var(--font-sans);
+  font-size: clamp(2rem, 10vw, 3.4rem);
+  font-variant-numeric: tabular-nums;
+  font-weight: 720;
+  letter-spacing: -0.05em;
+  line-height: 0.98;
+}
+
+.analytics-kpi-hero__caption {
+  margin-top: 0.7rem;
+  color: color-mix(in srgb, var(--nm-muted) 84%, var(--nm-text));
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.analytics-kpi-strip {
+  display: grid;
+  overflow: hidden;
+  min-width: 0;
+  margin: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 0;
+  border-radius: 1.15rem;
+  background: var(--nm-surface);
+}
+
+.analytics-kpi-metric {
+  display: grid;
+  min-width: 0;
+  min-height: 7.25rem;
+  align-content: center;
+  padding: 0.9rem 0.8rem;
+}
+
+.analytics-kpi-metric + .analytics-kpi-metric {
+  border-left: 1px solid var(--nm-line);
+}
+
+.analytics-kpi-metric dt,
+.analytics-kpi-metric dd,
+.analytics-kpi-metric small {
+  margin: 0;
+}
+
+.analytics-kpi-metric dt {
+  color: var(--nm-muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.analytics-kpi-metric__value {
+  overflow-wrap: anywhere;
+  margin-top: 0.55rem;
+  color: var(--nm-text);
+  font-family: var(--font-sans);
+  font-size: clamp(1rem, 4.5vw, 1.4rem);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.08;
+}
+
+.analytics-kpi-metric--income .analytics-kpi-metric__value {
+  color: var(--nm-income);
+}
+
+.analytics-kpi-metric--expense .analytics-kpi-metric__value {
+  color: var(--nm-expense);
+}
+
+.analytics-kpi-metric--savings .analytics-kpi-metric__value {
+  color: var(--nm-chart-net);
+}
+
+.analytics-kpi-metric .analytics-kpi-metric__meta {
+  margin-top: 0.45rem;
+}
+
+.analytics-kpi-metric__meta small {
+  display: block;
+  margin-top: 0;
+  color: var(--nm-muted);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.analytics-charts {
+  display: grid;
+  overflow: hidden;
+  min-width: 0;
+  gap: 0;
+}
+
+.analytics-chart-suite {
+  border: 0;
+  border-radius: 1.25rem;
+  background: var(--nm-surface);
+}
+
+.analytics-chart-section {
+  min-width: 0;
+  padding: 1rem 0.6rem 0.8rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.analytics-chart-section + .analytics-chart-section {
+  border-top: 1px solid var(--nm-line);
+}
+
+.analytics-chart-section--cumulative {
+  padding-top: 1.05rem;
+}
+
+.analytics-chart-section__heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.1rem 0.55rem 0.55rem;
+}
+
+.analytics-chart-section__heading span,
+.analytics-chart-section__heading h3 {
+  display: block;
+  margin: 0;
+}
+
+.analytics-chart-section__heading div > span {
+  color: var(--nm-muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.analytics-chart-section__heading h3 {
+  margin-top: 0.25rem;
+  color: var(--nm-text);
+  font-family: var(--font-sans);
+  font-size: clamp(1rem, 4.2vw, 1.3rem);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+}
+
+.analytics-chart-section__currency {
+  flex: none;
+  min-height: 2.75rem;
+  padding: 0.65rem 0.72rem;
+  border: 0;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--nm-accent) 78%, var(--nm-text));
+  background: color-mix(in srgb, var(--nm-accent) 9%, transparent);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.analytics-chart-canvas {
+  position: relative;
+  overflow: clip;
+  min-width: 0;
+  padding: 2px;
+  border-radius: 0.65rem;
+  background: transparent;
+}
+
+.analytics-chart-canvas .recharts-wrapper:focus-visible,
+.analytics-chart-canvas .recharts-surface:focus-visible {
+  outline: 2px solid var(--nm-focus);
+  outline-offset: 2px;
+}
+
+.analytics-chart-canvas .recharts-tooltip-wrapper {
+  z-index: 4;
+}
+
+.analytics-chart-tooltip {
+  max-width: calc(100vw - 2rem);
+  min-width: min(14rem, calc(100vw - 2rem));
+  padding: 0.78rem 0.85rem;
+  border: 1px solid var(--nm-line-strong);
+  border-radius: 0.85rem;
+  color: var(--nm-text);
+  background: color-mix(in srgb, var(--nm-raised) 96%, transparent);
+  box-shadow: var(--nm-shadow-raised);
+  backdrop-filter: blur(12px);
+}
+
+.analytics-chart-tooltip > strong {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-size: 0.75rem;
+}
+
+.analytics-chart-tooltip dl {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+}
+
+.analytics-chart-tooltip__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--nm-muted);
+  font-size: 0.72rem;
+}
+
+.analytics-chart-tooltip__row dt,
+.analytics-chart-tooltip__row dd {
+  margin: 0;
+}
+
+.analytics-chart-tooltip__row dd {
+  color: var(--nm-text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+}
+
+.analytics-chart-tooltip__row--income dd {
+  color: var(--nm-income);
+}
+
+.analytics-chart-tooltip__row--expense dd {
+  color: var(--nm-expense);
+}
+
+.analytics-chart-tooltip__row--cumulative {
+  margin-top: 0.2rem;
+  padding-top: 0.42rem;
+  border-top: 1px solid var(--nm-line);
+}
+
+.analytics-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.85rem;
+  padding: 0.35rem 0.55rem 0.1rem;
+  color: var(--nm-muted);
+  font-size: 0.7rem;
+}
+
+.analytics-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34rem;
+}
+
+.analytics-chart-legend i {
+  display: inline-block;
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 0.2rem;
+}
+
+.analytics-chart-legend__income {
+  background: var(--nm-income);
+}
+
+.analytics-chart-legend__expense {
+  border: 1px solid color-mix(in srgb, var(--nm-expense) 65%, transparent);
+  background: repeating-linear-gradient(135deg, var(--nm-expense) 0 2px, transparent 2px 4px);
+}
+
+.analytics-chart-legend__net {
+  height: 0.14rem !important;
+  border-radius: 999px !important;
+  background: var(--nm-chart-net);
 }
 
 .period-card {
@@ -887,7 +1302,21 @@ select {
 .cashflow-content {
   display: grid;
   min-width: 0;
-  gap: 1rem;
+  gap: 1.15rem;
+}
+
+.analytics-kpi-strip--skeleton {
+  gap: 0;
+  padding: 0.7rem;
+}
+
+.analytics-kpi-strip--skeleton > div {
+  min-width: 0;
+  border-radius: 0.7rem;
+}
+
+.analytics-kpi-strip--skeleton > div + div {
+  margin-left: 0.6rem;
 }
 
 .currency-chips {
@@ -900,208 +1329,76 @@ select {
   min-width: 3.8rem;
   min-height: 2.75rem;
   padding: 0.55rem 0.85rem;
-  border: 1px solid var(--nm-line);
+  border: 1px solid transparent;
   border-radius: 999px;
   color: var(--nm-muted);
-  background: color-mix(in srgb, var(--nm-canvas) 35%, transparent);
-  font-size: 0.72rem;
-  font-weight: 800;
+  background: var(--nm-surface);
+  font-size: 0.75rem;
+  font-weight: 750;
   letter-spacing: 0.08em;
+  transition: color 150ms ease, background-color 150ms ease;
 }
 
 .currency-chip[aria-pressed="true"] {
-  border-color: color-mix(in srgb, var(--nm-accent) 42%, transparent);
+  border-color: transparent;
   color: var(--nm-accent-text);
   background: var(--nm-accent);
-}
-
-.cashflow-totals {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
-  gap: 0.55rem;
-}
-
-.cashflow-totals > div {
-  min-width: 0;
-  padding: 0.75rem 0.8rem;
-  border: 1px solid var(--nm-line);
-  border-radius: 0.95rem;
-  background: color-mix(in srgb, var(--nm-canvas) 28%, transparent);
-}
-
-.cashflow-totals span,
-.cashflow-totals strong {
-  display: block;
-}
-
-.cashflow-totals span {
-  color: var(--nm-muted);
-  font-size: 0.62rem;
-}
-
-.cashflow-totals strong {
-  overflow-wrap: anywhere;
-  margin-top: 0.35rem;
-  color: var(--nm-text);
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.cashflow-totals strong.money-income {
-  color: var(--nm-income);
-}
-
-.cashflow-totals strong.money-expense {
-  color: var(--nm-expense);
-}
-
-.cashflow-chart-frame {
-  overflow: hidden;
-  width: 100%;
-  max-width: 100%;
-  padding: 0.8rem 0.65rem 0.65rem;
-  border: 1px solid var(--nm-line);
-  border-radius: 1.15rem;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--nm-raised) 78%, transparent), color-mix(in srgb, var(--nm-canvas) 30%, transparent));
-}
-
-.cashflow-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.65rem 1rem;
-  padding-inline: 0.25rem;
-  color: var(--nm-muted);
-  font-size: 0.62rem;
-}
-
-.cashflow-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.cashflow-legend i {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 0.18rem;
-}
-
-.cashflow-legend__income { background: var(--nm-income); }
-.cashflow-legend__expense { background: var(--nm-expense); }
-.cashflow-legend__net {
-  height: 0.14rem !important;
-  border-radius: 999px !important;
-  background: var(--nm-accent);
-}
-
-.cashflow-chart {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  height: auto;
-  margin-top: 0.25rem;
-}
-
-.cashflow-chart__grid,
-.cashflow-chart__zero {
-  vector-effect: non-scaling-stroke;
-}
-
-.cashflow-chart__grid {
-  stroke: color-mix(in srgb, var(--nm-muted) 12%, transparent);
-  stroke-dasharray: 3 5;
-  stroke-width: 1;
-}
-
-.cashflow-chart__zero {
-  stroke: color-mix(in srgb, var(--nm-muted) 30%, transparent);
-  stroke-width: 1;
-}
-
-.cashflow-chart__income {
-  fill: color-mix(in srgb, var(--nm-income) 76%, transparent);
-}
-
-.cashflow-chart__expense {
-  fill: color-mix(in srgb, var(--nm-expense) 72%, transparent);
-}
-
-.cashflow-chart__net {
-  fill: none;
-  stroke: var(--nm-accent);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
-  vector-effect: non-scaling-stroke;
-}
-
-.cashflow-chart__net-point {
-  fill: var(--nm-accent);
-  stroke: var(--nm-raised);
-  stroke-width: 1.25;
-  vector-effect: non-scaling-stroke;
-}
-
-.cashflow-axis {
-  display: flex;
-  min-height: 1.4rem;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding-inline: 0.25rem;
-  color: var(--nm-muted);
-  font-size: 0.58rem;
 }
 
 .cashflow-counts {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
+  gap: 0;
+  padding-block: 0.2rem;
 }
 
 .cashflow-counts > div {
   display: grid;
   min-width: 0;
-  min-height: 4rem;
+  min-height: 4.5rem;
   align-content: center;
   gap: 0.25rem;
-  padding: 0.65rem;
-  border: 1px solid var(--nm-line);
-  border-radius: 0.9rem;
+  padding: 0.7rem;
+  border: 0;
+  border-radius: 0;
   text-align: center;
+}
+
+.cashflow-counts > div + div {
+  border-left: 1px solid var(--nm-line);
 }
 
 .cashflow-counts span {
   color: var(--nm-muted);
-  font-size: 0.58rem;
-  line-height: 1.25;
+  font-size: 0.68rem;
+  line-height: 1.3;
 }
 
 .cashflow-counts strong {
   color: var(--nm-text);
-  font-family: var(--font-serif);
-  font-size: 1.1rem;
+  font-family: var(--font-sans);
+  font-size: 1.2rem;
   font-variant-numeric: tabular-nums;
-  font-weight: 500;
+  font-weight: 720;
 }
 
 .cashflow-table-details {
-  overflow: hidden;
-  border: 1px solid var(--nm-line);
-  border-radius: 1rem;
+  overflow: visible;
+  border: 0;
+  border-top: 1px solid var(--nm-line);
+  border-radius: 0;
 }
 
 .cashflow-table-details summary {
   display: flex;
-  min-height: 2.75rem;
+  min-height: 2.875rem;
   align-items: center;
-  padding: 0.7rem 0.9rem;
+  padding: 0.72rem 0;
   color: var(--nm-text);
-  background: color-mix(in srgb, var(--nm-canvas) 28%, transparent);
+  background: transparent;
   cursor: pointer;
-  font-size: 0.72rem;
-  font-weight: 700;
+  font-size: 0.75rem;
+  font-weight: 650;
 }
 
 .cashflow-table-details summary::before {
@@ -1114,10 +1411,17 @@ select {
   content: "−";
 }
 
+.cashflow-table-details summary:focus-visible {
+  outline: 2px solid var(--nm-focus);
+  outline-offset: 2px;
+}
+
 .cashflow-table-scroll {
   overflow-x: auto;
   max-width: 100%;
   border-top: 1px solid var(--nm-line);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--nm-surface) 76%, transparent);
 }
 
 .cashflow-table {
@@ -1162,7 +1466,7 @@ select {
 
 .cashflow-empty {
   display: grid;
-  min-height: 12rem;
+  min-height: 9rem;
   place-items: center;
   align-content: center;
   padding: 1.5rem;
@@ -1174,23 +1478,79 @@ select {
   width: 2.8rem;
   height: 2.8rem;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--nm-accent) 25%, transparent);
+  border: 0;
   border-radius: 50%;
-  color: var(--nm-accent);
+  color: var(--nm-chart-net);
+  background: color-mix(in srgb, var(--nm-chart-net) 9%, transparent);
 }
 
 .cashflow-empty strong {
   margin-top: 0.8rem;
   color: var(--nm-text);
-  font-family: var(--font-serif);
-  font-size: 1.15rem;
-  font-weight: 500;
+  font-family: var(--font-sans);
+  font-size: 1.05rem;
+  font-weight: 700;
 }
 
 .cashflow-empty p {
   margin: 0.35rem 0 0;
   color: var(--nm-muted);
   font-size: 0.72rem;
+}
+
+.analytics-page {
+  min-width: 0;
+  gap: clamp(1.6rem, 5vw, 2.4rem);
+}
+
+.analytics-monthly-context {
+  display: grid;
+  min-width: 0;
+  gap: clamp(1.5rem, 5vw, 2rem);
+  padding-top: clamp(1.5rem, 5vw, 2.25rem);
+  border-top: 1px solid var(--nm-line);
+}
+
+.analytics-monthly-context__heading,
+.analytics-context-section .section-heading {
+  margin-bottom: 0;
+}
+
+.analytics-context-section {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.analytics-context-section + .analytics-context-section {
+  padding-top: clamp(1.25rem, 4vw, 1.75rem);
+  border-top: 1px solid var(--nm-line);
+}
+
+.analytics-overview__periods {
+  overflow: hidden;
+  margin-top: 0.9rem;
+  gap: 0;
+  border-radius: 1rem;
+  background: var(--nm-surface);
+}
+
+.analytics-overview__periods .period-card {
+  min-height: 5rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.analytics-overview__periods .period-card + .period-card {
+  border-left: 1px solid var(--nm-line);
+}
+
+.analytics-overview__periods .period-card--current {
+  background: color-mix(in srgb, var(--nm-accent) 6%, transparent);
 }
 
 .comparison-grid {
@@ -1202,11 +1562,9 @@ select {
 .comparison-card {
   overflow: hidden;
   padding: clamp(1rem, 4vw, 1.35rem);
-  border: 1px solid var(--nm-line);
-  border-radius: 1.4rem;
-  background:
-    radial-gradient(circle at 90% -10%, color-mix(in srgb, var(--nm-accent) 10%, transparent), transparent 12rem),
-    color-mix(in srgb, var(--nm-surface) 94%, transparent);
+  border: 0;
+  border-radius: 1.15rem;
+  background: var(--nm-surface);
 }
 
 .comparison-card__topline,
@@ -1244,10 +1602,10 @@ select {
   overflow-wrap: anywhere;
   margin-top: 0.35rem;
   color: var(--nm-text);
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: clamp(1.3rem, 5vw, 1.8rem);
   font-variant-numeric: tabular-nums;
-  font-weight: 500;
+  font-weight: 700;
 }
 
 .comparison-card__hero strong.money-income {
@@ -1369,7 +1727,7 @@ select {
   width: 1.35rem;
   flex: none;
   color: color-mix(in srgb, var(--nm-muted) 55%, transparent);
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: 0.72rem;
 }
 
@@ -1429,7 +1787,7 @@ select {
   height: 100%;
   min-width: 0.2rem;
   border-radius: inherit;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--nm-accent) 60%, #536e68), var(--nm-accent));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--nm-accent) 70%, var(--nm-chart-net)), var(--nm-accent));
 }
 
 .category-share-row__amount {
@@ -1580,7 +1938,7 @@ select {
   overflow-wrap: anywhere;
   margin: 1rem 0 1.1rem;
   color: var(--nm-text);
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: clamp(1.6rem, 7vw, 2.3rem);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.035em;
@@ -1650,7 +2008,7 @@ select {
   height: 100%;
   min-width: 0.3rem;
   border-radius: inherit;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--nm-accent) 66%, #775f34), var(--nm-accent));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--nm-accent) 70%, var(--nm-chart-net)), var(--nm-accent));
 }
 
 .draft-banner {
@@ -1957,7 +2315,7 @@ select {
 .draft-review__amount {
   overflow-wrap: anywhere;
   margin: 0;
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: clamp(1.8rem, 8vw, 3rem);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.04em;
@@ -2081,7 +2439,7 @@ select {
 .empty-state__title {
   margin: 1rem 0 0;
   color: var(--nm-text);
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: 1.45rem;
   font-weight: 500;
 }
@@ -2494,6 +2852,46 @@ select {
     grid-template-columns: 1fr;
   }
 
+  .analytics-period-tab {
+    min-height: 2.75rem;
+  }
+
+  .analytics-period-tab span {
+    display: none;
+  }
+
+  .analytics-range-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .analytics-range-caption {
+    text-align: left;
+  }
+
+  .analytics-kpi-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .analytics-kpi-metric {
+    min-height: 6.8rem;
+    padding-inline: 0.65rem;
+  }
+
+  .analytics-chart-section {
+    padding-inline: 0.25rem;
+  }
+
+  .analytics-chart-section__heading,
+  .analytics-chart-legend {
+    padding-inline: 0.75rem;
+  }
+
+  .analytics-overview__periods .period-card + .period-card {
+    border-top: 1px solid var(--nm-line);
+    border-left: 0;
+  }
+
   .comparison-card__hero {
     align-items: flex-start;
     flex-direction: column;
@@ -2501,6 +2899,50 @@ select {
 
   .comparison-card__hero > div:last-child {
     text-align: left;
+  }
+}
+
+@media (max-width: 479px) {
+  .analytics-chart-canvas:not(.analytics-chart-canvas--compact) .recharts-responsive-container {
+    height: 260px !important;
+  }
+
+  .analytics-chart-canvas--compact .recharts-responsive-container {
+    height: 128px !important;
+  }
+}
+
+@media (max-width: 359px) {
+  .analytics-kpi-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .analytics-kpi-metric:nth-child(3),
+  .analytics-kpi-strip--skeleton > :nth-child(3) {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--nm-line);
+    border-left: 0;
+  }
+
+  .analytics-kpi-strip--skeleton > :nth-child(3) {
+    margin-left: 0;
+  }
+
+  .analytics-chart-section__currency {
+    min-height: 2.75rem;
+  }
+}
+
+@media (min-width: 600px) and (max-width: 768px) {
+  .analytics-cashflow,
+  .analytics-monthly-context {
+    width: 100%;
+    max-width: 46rem;
+    margin-inline: auto;
+  }
+
+  .analytics-chart-section {
+    padding-inline: 0.9rem;
   }
 }
 
@@ -2519,18 +2961,21 @@ select {
 
 @media (prefers-color-scheme: light) {
   :root {
-    --nm-canvas: var(--tg-theme-bg-color, #f4f1e9);
-    --nm-surface: var(--tg-theme-secondary-bg-color, #fffdf8);
+    --nm-canvas: var(--tg-theme-bg-color, #f4f8f7);
+    --nm-surface: var(--tg-theme-secondary-bg-color, #ffffff);
     --nm-raised: var(--tg-theme-section-bg-color, var(--tg-theme-secondary-bg-color, #ffffff));
-    --nm-text: var(--tg-theme-text-color, #172022);
-    --nm-muted: var(--tg-theme-hint-color, #657071);
+    --nm-text: var(--tg-theme-text-color, #142524);
+    --nm-muted: var(--tg-theme-hint-color, #607271);
     --nm-line: color-mix(in srgb, var(--nm-text) 10%, transparent);
-    --nm-accent: var(--tg-theme-button-color, #9a7838);
+    --nm-line-strong: color-mix(in srgb, var(--nm-text) 18%, transparent);
+    --nm-accent: var(--tg-theme-button-color, #087f75);
     --nm-accent-text: var(--tg-theme-button-text-color, #ffffff);
-    --nm-income: #347961;
-    --nm-expense: #a8543d;
+    --nm-income: #147a58;
+    --nm-expense: #b64f3d;
+    --nm-chart-net: #315fba;
+    --nm-chart-hover: color-mix(in srgb, var(--nm-accent) 6%, transparent);
     --nm-danger: #b54843;
-    --nm-focus: #6f531c;
+    --nm-focus: #075f58;
     color-scheme: var(--nm-color-scheme, light);
   }
 

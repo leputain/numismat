@@ -21,6 +21,23 @@ export interface CashflowSummary {
   readonly maximumMagnitude: bigint;
 }
 
+export interface CashflowChartPoint {
+  readonly start: string;
+  readonly end: string;
+  readonly incomeMinor: string;
+  readonly expenseMinor: string;
+  readonly netMinor: string;
+  readonly cumulativeMinor: string;
+  readonly incomeCount: number;
+  readonly expenseCount: number;
+  readonly incomeVisual: number;
+  readonly expenseVisual: number;
+  readonly netVisual: number;
+  readonly cumulativeVisual: number;
+}
+
+const CHART_VISUAL_LIMIT = 10_000;
+
 function magnitude(value: bigint): bigint {
   return value < 0n ? -value : value;
 }
@@ -100,4 +117,57 @@ export function scaleMinorToPixels(value: bigint, maximum: bigint, extent: numbe
   // Only the bounded SVG coordinate is converted; the financial value never becomes Number.
   const pixels = Number(scaledHundredths) / 100;
   return value < 0n ? -pixels : pixels;
+}
+
+export function scaleMinorToChartUnit(value: bigint, maximum: bigint): number {
+  if (maximum <= 0n || value === 0n) {
+    return 0;
+  }
+  const absolute = magnitude(value);
+  const bounded = absolute > maximum ? maximum : absolute;
+  const scaled = (bounded * BigInt(CHART_VISUAL_LIMIT)) / maximum;
+  const visual = Number(scaled);
+  return value < 0n ? -visual : visual;
+}
+
+export function buildCashflowChartSeries(
+  points: readonly CashflowPoint[],
+): CashflowChartPoint[] {
+  let cumulative = 0n;
+  let maximumFlowMagnitude = 0n;
+  let maximumCumulativeMagnitude = 0n;
+  const cumulativeValues: bigint[] = [];
+
+  for (const point of points) {
+    cumulative += point.netMinor;
+    cumulativeValues.push(cumulative);
+    const cumulativeMagnitude = magnitude(cumulative);
+    if (cumulativeMagnitude > maximumCumulativeMagnitude) {
+      maximumCumulativeMagnitude = cumulativeMagnitude;
+    }
+    for (const value of [point.incomeMinor, point.expenseMinor, point.netMinor]) {
+      const absolute = magnitude(value);
+      if (absolute > maximumFlowMagnitude) {
+        maximumFlowMagnitude = absolute;
+      }
+    }
+  }
+
+  return points.map((point, index) => {
+    const cumulativeMinor = cumulativeValues[index] ?? 0n;
+    return {
+      start: point.start,
+      end: point.end,
+      incomeMinor: point.incomeMinor.toString(),
+      expenseMinor: point.expenseMinor.toString(),
+      netMinor: point.netMinor.toString(),
+      cumulativeMinor: cumulativeMinor.toString(),
+      incomeCount: point.incomeCount,
+      expenseCount: point.expenseCount,
+      incomeVisual: scaleMinorToChartUnit(point.incomeMinor, maximumFlowMagnitude),
+      expenseVisual: scaleMinorToChartUnit(-point.expenseMinor, maximumFlowMagnitude),
+      netVisual: scaleMinorToChartUnit(point.netMinor, maximumFlowMagnitude),
+      cumulativeVisual: scaleMinorToChartUnit(cumulativeMinor, maximumCumulativeMagnitude),
+    };
+  });
 }

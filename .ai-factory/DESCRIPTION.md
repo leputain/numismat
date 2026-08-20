@@ -23,7 +23,7 @@ The package version remains `0.45.0`; the M0/M1 platform foundation is unrelease
 - **Runtime:** CPython `>=3.14,<3.15`
 - **Telegram framework:** aiogram 3.30
 - **HTTP framework/server:** FastAPI 0.141.1 and minimal Uvicorn 0.52.3
-- **Frontend:** React 19.2.8, React Router 8.3.0, Vite 8.2.1, TypeScript 5.9.3, Tailwind CSS 4.3.3, and TanStack Query 5.101.4
+- **Frontend:** React 19.2.8, React Router 8.3.0, Vite 8.2.1, TypeScript 5.9.3, Tailwind CSS 4.3.3, TanStack Query 5.101.4, and Recharts 3.10.1
 - **Configuration and validation:** Pydantic 2 and pydantic-settings
 - **Database:** PostgreSQL 18
 - **Persistence:** SQLAlchemy 2 asyncio with psycopg 3

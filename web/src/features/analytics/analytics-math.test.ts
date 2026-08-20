@@ -7,7 +7,13 @@ import {
   savingsRateBasisPoints,
   shareBasisPoints,
 } from "./analytics-math";
-import { buildCashflowSeries, scaleMinorToPixels, summarizeCashflow } from "./timeseries-math";
+import {
+  buildCashflowChartSeries,
+  buildCashflowSeries,
+  scaleMinorToChartUnit,
+  scaleMinorToPixels,
+  summarizeCashflow,
+} from "./timeseries-math";
 
 describe("analytics money math", () => {
   it("keeps comparisons and shares in exact integer arithmetic", () => {
@@ -66,5 +72,37 @@ describe("analytics money math", () => {
     expect(summary.activeDays).toBe(1);
     expect(points[1]?.incomeMinor).toBe(0n);
     expect(scaleMinorToPixels(summary.maximumMagnitude, summary.maximumMagnitude, 88)).toBe(88);
+  });
+
+  it("gives Recharts only bounded visual units while retaining exact money", () => {
+    const huge = 9_223_372_036_854_775_807n;
+    const visual = scaleMinorToChartUnit(huge, huge);
+    const chart = buildCashflowChartSeries([
+      {
+        start: "2026-08-01T00:00:00Z",
+        end: "2026-08-02T00:00:00Z",
+        incomeMinor: huge,
+        expenseMinor: 7n,
+        netMinor: huge - 7n,
+        incomeCount: 1,
+        expenseCount: 1,
+      },
+      {
+        start: "2026-08-02T00:00:00Z",
+        end: "2026-08-03T00:00:00Z",
+        incomeMinor: 0n,
+        expenseMinor: huge,
+        netMinor: -huge,
+        incomeCount: 0,
+        expenseCount: 1,
+      },
+    ]);
+
+    expect(visual).toBe(10_000);
+    expect(chart[0]?.incomeMinor).toBe("9223372036854775807");
+    expect(chart[0]?.incomeVisual).toBe(10_000);
+    expect(chart[0]?.expenseVisual).toBeLessThanOrEqual(0);
+    expect(chart[1]?.cumulativeMinor).toBe("-7");
+    expect(Math.abs(chart[1]?.cumulativeVisual ?? 0)).toBeLessThanOrEqual(10_000);
   });
 });

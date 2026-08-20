@@ -18,7 +18,7 @@ export async function restartTransactionPagination(queryClient: QueryClient): Pr
 export async function refreshFinanceQueries(queryClient: QueryClient): Promise<void> {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboard }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.today }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.reportsRoot }),
     queryClient.invalidateQueries({ queryKey: queryKeys.transactions.detailRoot }),
   ]);
 }

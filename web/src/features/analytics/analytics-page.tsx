@@ -52,57 +52,72 @@ export function AnalyticsPage() {
       <PageHeading
         action={
           <Link className="button button--secondary analytics-page__action" to="/transactions">
-            Все операции
+            Операции
           </Link>
         }
-        description="Сравнение с прошлым месяцем. Суммы в разных валютах показаны отдельно."
+        description="Неделя, месяц или год — суммы по каждой валюте отдельно."
         eyebrow="Финансовая картина"
         title="Аналитика"
       />
 
-      <section aria-labelledby="periods-title" className="analytics-overview">
-        <div className="section-heading">
+      <CashflowTrend comparable={comparable} current={current} timeZone={timeZone} />
+
+      <section aria-labelledby="monthly-context-title" className="analytics-monthly-context">
+        <div className="section-heading analytics-monthly-context__heading">
           <div>
-            <p className="eyebrow">Границы отчёта</p>
-            <h2 className="section-title" id="periods-title">Периоды сравнения</h2>
+            <p className="eyebrow">Месячный контекст</p>
+            <h2 className="section-title" id="monthly-context-title">Месяц в деталях</h2>
+            <p className="section-description">
+              Отдельный срез текущего месяца: границы, сравнение и структура расходов.
+            </p>
           </div>
         </div>
-        <div className="analytics-period-grid analytics-overview__periods">
-          <article className="period-card period-card--current">
-            <span>Этот месяц</span>
-            <strong>{formatExclusivePeriod(current.start, current.end, locale, timeZone)}</strong>
-          </article>
-          <article className="period-card">
-            <span>Прошлый месяц</span>
-            <strong>{formatExclusivePeriod(comparable.start, comparable.end, locale, timeZone)}</strong>
-          </article>
-        </div>
-      </section>
 
-      <section aria-labelledby="comparison-title" className="analytics-comparison">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Каждая валюта отдельно</p>
-            <h2 className="section-title" id="comparison-title">Этот месяц и прошлый</h2>
+        <section aria-labelledby="periods-title" className="analytics-overview analytics-context-section">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Границы отчёта</p>
+              <h3 className="section-title" id="periods-title">Текущий и прошлый месяц</h3>
+            </div>
           </div>
-          <Link className="text-link" to="/transactions">Операции</Link>
-        </div>
-        <PeriodComparisonCards comparable={comparable} current={current} />
-      </section>
-
-      <CashflowTrend end={current.end} start={current.start} />
-
-      <section
-        aria-labelledby="analytics-categories-title"
-        className="surface-panel surface-panel--roomy analytics-categories"
-      >
-        <div className="section-heading section-heading--inside">
-          <div>
-            <p className="eyebrow">Структура месяца</p>
-            <h2 className="section-title" id="analytics-categories-title">Крупнейшие категории расходов</h2>
+          <div className="analytics-period-grid analytics-overview__periods">
+            <article className="period-card period-card--current">
+              <span>Этот месяц</span>
+              <strong>{formatExclusivePeriod(current.start, current.end, locale, timeZone)}</strong>
+            </article>
+            <article className="period-card">
+              <span>Прошлый месяц</span>
+              <strong>{formatExclusivePeriod(comparable.start, comparable.end, locale, timeZone)}</strong>
+            </article>
           </div>
-        </div>
-        <CategoryShareList categories={categories} totals={current.totals} />
+        </section>
+
+        <section
+          aria-labelledby="comparison-title"
+          className="analytics-comparison analytics-context-section"
+        >
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Каждая валюта отдельно</p>
+              <h3 className="section-title" id="comparison-title">Изменение расходов</h3>
+            </div>
+            <Link className="text-link" to="/transactions">Операции</Link>
+          </div>
+          <PeriodComparisonCards comparable={comparable} current={current} />
+        </section>
+
+        <section
+          aria-labelledby="analytics-categories-title"
+          className="analytics-categories analytics-context-section"
+        >
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Структура месяца</p>
+              <h3 className="section-title" id="analytics-categories-title">Куда ушли деньги</h3>
+            </div>
+          </div>
+          <CategoryShareList categories={categories} totals={current.totals} />
+        </section>
       </section>
     </div>
   );
