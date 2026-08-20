@@ -218,6 +218,24 @@ make release-gate   релизный gate: compose+openapi+edge+health+audit (б
 make release-gate-ci цель: быстрый CI-совместимый релизный проход (compose/openapi/frontend-api/frontend-audit)
 ```
 
+### Быстрый runbook gate
+
+Если падает `release-gate`, запускать по-очереди:
+- `make compose-config` (конфиги/secret placeholders в compose).
+- `make openapi-check` (контракт backend vs зафиксированный JSON).
+- `make frontend-api-check` (совместимость frontend-схем с контрактом).
+- `make web-secrets-check` (проверка secrets/mode/SAN для prod edge).
+- `make web-edge-smoke` (проверка edge-прокси и privacy headers).
+- `make frontend-audit` (npm audit).
+- `make healthcheck` (доступ к DB и alembic head).
+- `make audit` (финальный runtime dependency audit).
+
+Типовая быстрый путь диагностики:
+```bash
+make release-gate-ci   # локально/CI: compose+openapi+frontend API+audit
+make release-gate      # полный локальный prod-like gate
+```
+
 Итоговый M0/M1 handoff gate пройден: frozen sync, Ruff, mypy, unit/integration, dependency audit, пять Compose
 конфигураций, production image build и synthetic encrypted backup/restore. Production deployment не выполнялся.
 Production использует `compose.production.yaml`, отдельные runtime/migration secrets, `provision-runtime` и
