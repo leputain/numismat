@@ -2,6 +2,10 @@ import { lazy, Suspense } from "react";
 import type { ComponentType } from "react";
 import { Outlet, Route, Routes, useParams } from "react-router";
 
+import { DashboardPage } from "../features/dashboard/dashboard-page";
+import { DraftPage } from "../features/drafts/draft-page";
+import { TransactionDetailPage } from "../features/transactions/transaction-detail-page";
+import { TransactionsPage } from "../features/transactions/transactions-page";
 import { PageSkeleton } from "../shared/components/async-state";
 import { RouteErrorState } from "./states/route-error-state";
 import { AppShell } from "./shell/app-shell";
@@ -12,14 +16,8 @@ function lazyNamed<TProps extends object>(
   return lazy(async () => ({ default: await loader() }));
 }
 
-const DashboardPage = lazyNamed(async () =>
-  (await import("../features/dashboard/dashboard-page")).DashboardPage
-);
 const AnalyticsPage = lazyNamed(async () =>
   (await import("../features/analytics/analytics-page")).AnalyticsPage
-);
-const DraftPage = lazyNamed(async () =>
-  (await import("../features/drafts/draft-page")).DraftPage
 );
 const ComposeDraftPage = lazyNamed(async () =>
   (await import("../features/drafts/compose-draft-page")).ComposeDraftPage
@@ -61,12 +59,6 @@ const RecurringEditorPage = lazyNamed(async () =>
 );
 const RecurringPage = lazyNamed(async () =>
   (await import("../features/recurring/recurring-page")).RecurringPage
-);
-const TransactionDetailPage = lazyNamed(async () =>
-  (await import("../features/transactions/transaction-detail-page")).TransactionDetailPage
-);
-const TransactionsPage = lazyNamed(async () =>
-  (await import("../features/transactions/transactions-page")).TransactionsPage
 );
 const MorePage = lazyNamed(async () =>
   (await import("../features/more/more-page")).MorePage

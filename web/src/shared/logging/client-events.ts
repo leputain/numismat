@@ -42,7 +42,8 @@ export type ClientEventCode =
   | "transaction_action_started"
   | "transaction_detail_opened"
   | "transactions_opened"
-  | "ui_unexpected_error";
+  | "ui_unexpected_error"
+  | "ui_viewport_sync_failed";
 
 /**
  * Privacy boundary for client diagnostics. Production deliberately emits nothing;

@@ -78,4 +78,34 @@ describe("NativeTelegramMiniApp", () => {
     unsubscribeTheme();
     expect([...handlers.values()].every((callbacks) => callbacks.size === 0)).toBe(true);
   });
+
+  it("contains a Telegram version getter failure while subscribing to viewport events", () => {
+    const { webApp, target } = fixture();
+    Object.defineProperty(webApp, "version", {
+      configurable: true,
+      get(): never {
+        throw new Error("sentinel-version-getter");
+      },
+    });
+    const adapter = new NativeTelegramMiniApp(webApp, target);
+
+    expect(() => adapter.subscribeViewport(() => undefined)).not.toThrow();
+  });
+
+  it("removes an existing back listener even when a later version read fails", () => {
+    const { webApp, target, backClick } = fixture();
+    const adapter = new NativeTelegramMiniApp(webApp, target);
+    const listener = vi.fn();
+    adapter.setBackButton(true, listener);
+    expect(backClick.has(listener)).toBe(true);
+    Object.defineProperty(webApp, "version", {
+      configurable: true,
+      get(): never {
+        throw new Error("sentinel-version-getter");
+      },
+    });
+
+    expect(() => adapter.setBackButton(false)).not.toThrow();
+    expect(backClick.has(listener)).toBe(false);
+  });
 });

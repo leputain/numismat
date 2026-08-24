@@ -81,7 +81,7 @@ export class NativeTelegramMiniApp implements TelegramMiniAppPort {
     };
     cleanups.push(this.#subscribe("viewportChanged", viewportHandler));
 
-    if (isTelegramVersionAtLeast(this.#webApp.version, "8.0")) {
+    if (this.#isVersionAtLeast("8.0")) {
       const insetHandler: TelegramWebAppEventHandler = () => {
         this.#safeSdkCall(() => {
           if (projectTelegramViewport(this.#webApp, this.#styleTarget)) {
@@ -106,14 +106,11 @@ export class NativeTelegramMiniApp implements TelegramMiniAppPort {
   }
 
   public setBackButton(visible: boolean, listener?: () => void): void {
-    if (!isTelegramVersionAtLeast(this.#webApp.version, "6.1")) {
+    this.#clearBackListener();
+    if (!this.#isVersionAtLeast("6.1")) {
       return;
     }
     this.#safeSdkCall(() => {
-      if (this.#backListener !== undefined) {
-        this.#webApp.BackButton.offClick(this.#backListener);
-        this.#backListener = undefined;
-      }
       if (visible) {
         if (listener !== undefined) {
           this.#backListener = listener;
@@ -124,6 +121,15 @@ export class NativeTelegramMiniApp implements TelegramMiniAppPort {
         this.#webApp.BackButton.hide();
       }
     });
+  }
+
+  #clearBackListener(): void {
+    if (this.#backListener === undefined) {
+      return;
+    }
+    const listener = this.#backListener;
+    this.#backListener = undefined;
+    this.#safeSdkCall(() => this.#webApp.BackButton.offClick(listener));
   }
 
   public close(): void {
@@ -165,6 +171,15 @@ export class NativeTelegramMiniApp implements TelegramMiniAppPort {
       emitClientEvent("telegram_sdk_lifecycle_failed");
     }
   }
+
+  #isVersionAtLeast(required: string): boolean {
+    try {
+      return isTelegramVersionAtLeast(this.#webApp.version, required);
+    } catch {
+      emitClientEvent("telegram_sdk_lifecycle_failed");
+      return false;
+    }
+  }
 }
 
 export function createTelegramMiniApp(
@@ -180,7 +195,12 @@ export function createTelegramMiniApp(
     emitClientEvent("telegram_sdk_lifecycle_failed");
     return unavailableTelegramMiniApp();
   }
-  if (!isUsableWebApp(webApp) || styleTarget === undefined) {
+  try {
+    if (!isUsableWebApp(webApp) || styleTarget === undefined) {
+      return unavailableTelegramMiniApp();
+    }
+  } catch {
+    emitClientEvent("telegram_sdk_lifecycle_failed");
     return unavailableTelegramMiniApp();
   }
   return new NativeTelegramMiniApp(webApp, styleTarget);
