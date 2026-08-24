@@ -3,9 +3,17 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 
 import { apiClient } from "../../app/providers";
-import type { ActiveDraftResponse, Draft, DraftAction, MutationResponse } from "../../shared/api/types";
+import type {
+  ActiveDraftResponse,
+  DashboardResponse,
+  Draft,
+  DraftAction,
+  MutationResponse,
+  Transaction,
+} from "../../shared/api/types";
+import { useSessionFormat } from "../../shared/auth/use-session-format";
 import { useAuth } from "../auth/auth-context";
-import { EmptyState, ErrorState, PageSkeleton } from "../../shared/components/async-state";
+import { ErrorState, PageSkeleton } from "../../shared/components/async-state";
 import { MutationFeedback } from "../../shared/components/mutation-feedback";
 import { PageHeading } from "../../shared/components/page-heading";
 import { isOptimisticConflict } from "../../shared/errors/user-message";
@@ -17,9 +25,18 @@ import {
   restartTransactionPagination,
 } from "../../shared/mutations/query-recovery";
 import { queryKeys } from "../../shared/queries/query-keys";
+import { DraftCaptureLanding } from "./draft-capture-landing";
+import { draftProgressFor } from "./draft-progress";
 import { DraftStateRenderer } from "./draft-state-renderer";
+import { useQuickDraftMutation } from "./use-quick-draft-mutation";
 
-type DraftMutationKind = "cancel" | "confirm" | "create" | "patch" | "replace" | "resume";
+type DraftMutationKind =
+  | "cancel"
+  | "confirm"
+  | "create"
+  | "patch"
+  | "replace"
+  | "resume";
 interface DraftMutationContext {
   readonly kind: DraftMutationKind;
   readonly catalog?: "accounts" | "categories";
@@ -90,50 +107,8 @@ const BACK_STATES = new Set<Draft["state"]>([
   "edit_description",
 ]);
 
-const DRAFT_PROGRESS_STEPS = [
-  "Тип",
-  "Сумма",
-  "Категория",
-  "Счёт",
-  "Дата",
-  "Описание",
-  "Проверка",
-] as const;
-
-const QUICK_PROGRESS_STEPS = ["Категория", "Счёт", "Проверка"] as const;
-const REVIEW_EDIT_PROGRESS_STEPS = ["Изменение", "Проверка"] as const;
-
-interface DraftProgress {
-  readonly currentIndex: number;
-  readonly steps: readonly string[];
-}
-
-const DRAFT_STATE_PROGRESS: Partial<Record<Draft["state"], DraftProgress>> = {
-  wizard_type: { currentIndex: 0, steps: DRAFT_PROGRESS_STEPS },
-  wizard_amount: { currentIndex: 1, steps: DRAFT_PROGRESS_STEPS },
-  wizard_category: { currentIndex: 2, steps: DRAFT_PROGRESS_STEPS },
-  custom_category: { currentIndex: 2, steps: DRAFT_PROGRESS_STEPS },
-  wizard_account: { currentIndex: 3, steps: DRAFT_PROGRESS_STEPS },
-  custom_account: { currentIndex: 3, steps: DRAFT_PROGRESS_STEPS },
-  wizard_date: { currentIndex: 4, steps: DRAFT_PROGRESS_STEPS },
-  custom_date: { currentIndex: 4, steps: DRAFT_PROGRESS_STEPS },
-  wizard_description: { currentIndex: 5, steps: DRAFT_PROGRESS_STEPS },
-  wizard_confirm: { currentIndex: 6, steps: DRAFT_PROGRESS_STEPS },
-  quick_category: { currentIndex: 0, steps: QUICK_PROGRESS_STEPS },
-  category_required: { currentIndex: 0, steps: QUICK_PROGRESS_STEPS },
-  quick_account: { currentIndex: 1, steps: QUICK_PROGRESS_STEPS },
-  account_required: { currentIndex: 1, steps: QUICK_PROGRESS_STEPS },
-  quick_confirm: { currentIndex: 2, steps: QUICK_PROGRESS_STEPS },
-  review_type: { currentIndex: 0, steps: REVIEW_EDIT_PROGRESS_STEPS },
-  review_amount: { currentIndex: 0, steps: REVIEW_EDIT_PROGRESS_STEPS },
-  review_category: { currentIndex: 0, steps: REVIEW_EDIT_PROGRESS_STEPS },
-  review_account: { currentIndex: 0, steps: REVIEW_EDIT_PROGRESS_STEPS },
-  review_date: { currentIndex: 0, steps: REVIEW_EDIT_PROGRESS_STEPS },
-  review_date_input: { currentIndex: 0, steps: REVIEW_EDIT_PROGRESS_STEPS },
-};
-
-function DraftProgressGuide({ state }: { readonly state: Draft["state"] }) {
-  const progress = DRAFT_STATE_PROGRESS[state];
+function DraftProgressGuide({ draft }: { readonly draft: Draft }) {
+  const progress = draftProgressFor(draft);
   if (progress === undefined) {
     return null;
   }
@@ -170,6 +145,7 @@ function DraftProgressGuide({ state }: { readonly state: Draft["state"] }) {
 
 export function DraftPage() {
   const auth = useAuth();
+  const { locale, timeZone } = useSessionFormat();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [cancelDialog, setCancelDialog] = useState(false);
@@ -177,6 +153,12 @@ export function DraftPage() {
     queryKey: queryKeys.drafts.active,
     queryFn: ({ signal }) => apiClient.get<ActiveDraftResponse>("/api/v1/drafts/active", { signal }),
     staleTime: 0,
+  });
+  const dashboard = useQuery({
+    queryKey: queryKeys.dashboard,
+    queryFn: ({ signal }) => apiClient.get<DashboardResponse>("/api/v1/dashboard", { signal }),
+    enabled: activeDraft.data?.draft === null,
+    staleTime: 30_000,
   });
   const mutation = usePreparedMutation<MutationResponse | undefined, DraftMutationContext>({
     eventScope: "draft",
@@ -210,6 +192,22 @@ export function DraftPage() {
       }
     },
   });
+  const repeatMutation = usePreparedMutation<MutationResponse, string>({
+    eventScope: "transaction",
+    onSuccess: async () => {
+      await refreshDraftQueries(queryClient);
+    },
+    onRejected: async (error) => {
+      if (isOptimisticConflict(error)) {
+        emitClientEvent("mutation_conflict_detected");
+      }
+      await refreshDraftQueries(queryClient);
+    },
+    onOutcomeUnknown: async () => {
+      await refreshDraftQueries(queryClient);
+    },
+  });
+  const quickDraftMutation = useQuickDraftMutation();
 
   useEffect(() => emitClientEvent("draft_opened"), []);
 
@@ -221,7 +219,13 @@ export function DraftPage() {
   }
 
   const draft = activeDraft.data.draft;
-  const disabled = mutation.isPending || mutation.outcomeUnknown;
+  const repeatDisabled = repeatMutation.isPending || repeatMutation.outcomeUnknown;
+  const disabled =
+    mutation.isPending ||
+    mutation.outcomeUnknown ||
+    quickDraftMutation.disabled ||
+    repeatDisabled;
+  const actionsDisabled = disabled;
   const runRevisionMutation = (kind: Exclude<DraftMutationKind, "create" | "patch">) => {
     if (draft === null) {
       return;
@@ -248,26 +252,41 @@ export function DraftPage() {
     return (
       <div className="page-stack page-stack--narrow draft-page">
         <PageHeading
-          description="Каждая операция сначала собирается в черновике. Вы проверяете данные и только потом сохраняете запись."
-          eyebrow="Безопасный ввод"
+          description="Сумма или короткая запись — затем только недостающие поля и обязательная проверка."
+          eyebrow="Новая операция"
           title="Новая операция"
         />
-        <EmptyState title="Активного черновика нет">
-          <p>Начните пошаговое добавление. До вашего подтверждения запись не появится в истории.</p>
-          <button
-            className="button button--primary mt-5"
-            disabled={disabled}
-            onClick={() => mutation.run({ path: "/api/v1/drafts", body: {}, context: { kind: "create" } })}
-            type="button"
-          >
-            {mutation.isPending ? "Создаём…" : "Начать черновик"}
-          </button>
-        </EmptyState>
-        <MutationFeedback
-          error={mutation.error}
-          onRetryUnknown={mutation.retryUnknown}
-          outcomeUnknown={mutation.outcomeUnknown}
-          pending={mutation.isPending}
+        <DraftCaptureLanding
+          actionsDisabled={actionsDisabled}
+          locale={locale}
+          onQuickSubmit={quickDraftMutation.submit}
+          onRepeat={(transaction: Transaction) =>
+            repeatMutation.run({
+              path: `/api/v1/transactions/${transaction.id}/repeat`,
+              body: { version: transaction.version },
+              context: transaction.id,
+            })
+          }
+          onRetryRecent={() => void dashboard.refetch()}
+          onStartWizard={() =>
+            mutation.run({ path: "/api/v1/drafts", body: {}, context: { kind: "create" } })
+          }
+          quickMutation={{
+            error: quickDraftMutation.error,
+            onRetryUnknown: quickDraftMutation.retryUnknown,
+            outcomeUnknown: quickDraftMutation.outcomeUnknown,
+            pending: quickDraftMutation.isPending,
+          }}
+          recentError={dashboard.isError}
+          recentPending={dashboard.isPending}
+          recentTransactions={dashboard.data?.recent_transactions}
+          repeatMutation={{
+            error: repeatMutation.error,
+            onRetryUnknown: repeatMutation.retryUnknown,
+            outcomeUnknown: repeatMutation.outcomeUnknown,
+            pending: repeatMutation.isPending,
+          }}
+          timeZone={timeZone}
         />
       </div>
     );
@@ -282,7 +301,7 @@ export function DraftPage() {
       />
 
       {draft.conflict == null && !draft.suspended && draft.supported && draft.state !== "unsupported" ? (
-        <DraftProgressGuide state={draft.state} />
+        <DraftProgressGuide draft={draft} />
       ) : null}
 
       {draft.conflict !== null && draft.conflict !== undefined ? (
@@ -332,6 +351,18 @@ export function DraftPage() {
         onRetryUnknown={mutation.retryUnknown}
         outcomeUnknown={mutation.outcomeUnknown}
         pending={mutation.isPending}
+      />
+      <MutationFeedback
+        error={quickDraftMutation.error}
+        onRetryUnknown={quickDraftMutation.retryUnknown}
+        outcomeUnknown={quickDraftMutation.outcomeUnknown}
+        pending={quickDraftMutation.isPending}
+      />
+      <MutationFeedback
+        error={repeatMutation.error}
+        onRetryUnknown={repeatMutation.retryUnknown}
+        outcomeUnknown={repeatMutation.outcomeUnknown}
+        pending={repeatMutation.isPending}
       />
 
       {draft.conflict == null && !draft.suspended && draft.supported && draft.flow !== "unsupported" && draft.state !== "unsupported" ? (

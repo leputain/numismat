@@ -25,6 +25,33 @@ function fallbackMoney(
   return `${negative ? "−" : ""}${grouped}${fractionDigits > 0 ? `.${fraction}` : ""} ${currency}`;
 }
 
+/** Formats canonical two-digit minor units without attaching or inferring a currency. */
+export function formatMinorAmount(minor: string, locale = "ru-RU"): string {
+  if (!CANONICAL_MINOR_UNITS.test(minor)) {
+    return "—";
+  }
+
+  const canonicalLocale = normalizeLocale(locale);
+  const minorUnits = BigInt(minor);
+  const negative = minorUnits < 0n;
+  const absolute = negative ? -minorUnits : minorUnits;
+  const scale = 10n ** BigInt(MINOR_DIGITS);
+  const whole = absolute / scale;
+  const fraction = (absolute % scale).toString().padStart(MINOR_DIGITS, "0");
+  const groupedWhole = new Intl.NumberFormat(canonicalLocale, {
+    useGrouping: true,
+    maximumFractionDigits: 0,
+  }).format(whole);
+  const decimal =
+    new Intl.NumberFormat(canonicalLocale, {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1,
+    })
+      .formatToParts(1.1)
+      .find((part) => part.type === "decimal")?.value ?? ",";
+  return `${negative ? "−" : ""}${groupedWhole}${decimal}${fraction}`;
+}
+
 /** Formats canonical integer minor units without ever converting the amount to Number. */
 export function formatMoney(minor: string, currency: string, locale = "ru-RU"): string {
   if (!CANONICAL_MINOR_UNITS.test(minor)) {

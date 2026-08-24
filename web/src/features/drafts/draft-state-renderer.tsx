@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { Draft, DraftAction } from "../../shared/api/types";
 import { useSessionFormat } from "../../shared/auth/use-session-format";
 import { dateInputToWire, formatTransactionDate } from "../../shared/format/date-time";
-import { formatTransactionMoney } from "../../shared/finance/money";
+import { formatMinorAmount, formatTransactionMoney } from "../../shared/finance/money";
 import { AccountSelector, CategorySelector } from "../catalogs/catalog-selectors";
 
 interface DraftStateRendererProps {
@@ -282,6 +282,7 @@ export function DraftStateRenderer({
   onConfirm,
   onCloseTelegram,
 }: DraftStateRendererProps) {
+  const { locale } = useSessionFormat();
   const inputText = (text: string, catalog?: "accounts" | "categories") =>
     onAction({ action: "input_text", revision: draft.revision, text }, catalog);
   const navigate = (
@@ -290,7 +291,28 @@ export function DraftStateRenderer({
   const type = draft.transaction?.type;
 
   switch (draft.state) {
-    case "wizard_type":
+    case "wizard_type": {
+      const amountMinor = draft.flow === "quick" ? draft.transaction?.amount_minor : null;
+      return (
+        <div className="space-y-5">
+          <StepIntro
+            title="Расход или доход?"
+            text={
+              amountMinor == null
+                ? "Выберите направление движения денег."
+                : "Сумма уже распознана. Осталось выбрать направление движения денег."
+            }
+          />
+          {amountMinor == null ? null : (
+            <p aria-label={`Распознанная сумма ${formatMinorAmount(amountMinor, locale)}`} className="captured-amount">
+              <span>Распознанная сумма</span>
+              <strong>{formatMinorAmount(amountMinor, locale)}</strong>
+            </p>
+          )}
+          <TypeSelector disabled={disabled} onSelect={(value) => onAction({ action: "select_type", revision: draft.revision, value })} />
+        </div>
+      );
+    }
     case "review_type":
       return (
         <div className="space-y-5">
