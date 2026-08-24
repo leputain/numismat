@@ -5,6 +5,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from finbot.application.dto import (
+    EMPTY_TRANSACTION_LIST_FILTERS,
     AccountSnapshot,
     CategorySnapshot,
     CategoryTotalSnapshot,
@@ -26,6 +27,7 @@ from finbot.application.dto import (
     TimeSeriesGrain,
     TransactionCursor,
     TransactionCursorItem,
+    TransactionListFilters,
     TransactionMutationResult,
     TransactionSnapshot,
     VersionedTransactionCommand,
@@ -151,6 +153,7 @@ class FinanceReader(Protocol):
         *,
         cursor: TransactionCursor | None,
         limit: int,
+        filters: TransactionListFilters = EMPTY_TRANSACTION_LIST_FILTERS,
     ) -> tuple[TransactionCursorItem, ...]: ...
 
     async def list_deleted_transactions_after(

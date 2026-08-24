@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { RefObject } from "react";
 import { Link, useNavigate } from "react-router";
 
 import { apiClient } from "../../app/providers";
@@ -26,8 +27,26 @@ import {
 } from "../../shared/mutations/query-recovery";
 import { usePreparedMutation } from "../../shared/mutations/prepared-mutation";
 import { queryKeys } from "../../shared/queries/query-keys";
+import { draftPathWithReturn } from "../../shared/navigation/draft-return";
 
 const PAGE_LIMIT = 20;
+
+export function shouldAutoFetchNextBankImportPage(
+  items: readonly Pick<BankImportRow, "outcome">[],
+  options: {
+    readonly batchOpen: boolean;
+    readonly hasNextPage: boolean;
+    readonly fetchingNextPage: boolean;
+  },
+): boolean {
+  const { batchOpen, fetchingNextPage, hasNextPage } = options;
+  if (!batchOpen || !hasNextPage || fetchingNextPage) return false;
+  const hasActionable = items.some(
+    (row) => row.outcome === "pending" || row.outcome === "dismissed",
+  );
+  const hasActiveReview = items.some((row) => row.outcome === "awaiting_review");
+  return !hasActionable && !hasActiveReview;
+}
 
 function rowsPath(batchId: string, cursor: string | null): string {
   const params = new URLSearchParams({ limit: String(PAGE_LIMIT) });
@@ -48,7 +67,7 @@ function outcomeLabel(outcome: BankImportRow["outcome"]): string {
   return labels[outcome];
 }
 
-function BankImportRowCard({ batch, row }: { readonly batch: BankImportBatch; readonly row: BankImportRow }) {
+function BankImportRowCard({ batch, row, targetRef }: { readonly batch: BankImportBatch; readonly row: BankImportRow; readonly targetRef?: RefObject<HTMLElement | null> }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { locale, timeZone } = useSessionFormat();
@@ -67,7 +86,7 @@ function BankImportRowCard({ batch, row }: { readonly batch: BankImportBatch; re
       await restartBankImportPagination(queryClient);
       if (context === "draft" && response.result.kind === "draft") {
         await refreshDraftQueries(queryClient);
-        navigate("/draft");
+        navigate(draftPathWithReturn({ kind: "bank_import", batchId: batch.id }));
       } else if (context === "link") {
         await restartTransactionPagination(queryClient);
         await refreshFinanceQueries(queryClient);
@@ -88,7 +107,7 @@ function BankImportRowCard({ batch, row }: { readonly batch: BankImportBatch; re
   const disabled = mutation.isPending || mutation.outcomeUnknown;
   const baseBody = { batch_version: batch.version, row_version: row.version };
   return (
-    <article className="surface-panel space-y-4">
+    <article className="surface-panel space-y-4" ref={targetRef} tabIndex={targetRef === undefined ? undefined : -1}>
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="eyebrow">Строка {row.position}</p>
@@ -103,7 +122,7 @@ function BankImportRowCard({ batch, row }: { readonly batch: BankImportBatch; re
         <div><dt>Описание</dt><dd>{row.description || "Без описания"}</dd></div>
       </dl>
       {row.possible_duplicate ? <p className="notice notice--warning text-sm">Похожая строка уже встречалась на этом счёте. Проверьте данные и выберите действие.</p> : null}
-      {row.outcome === "awaiting_review" ? <Link className="button button--primary w-full" to="/draft">Открыть черновик</Link> : null}
+      {row.outcome === "awaiting_review" ? <Link className="button button--primary w-full" to={draftPathWithReturn({ kind: "bank_import", batchId: batch.id })}>Открыть черновик</Link> : null}
       {actionable ? (
         <div className="space-y-3">
           <div className="grid gap-2 sm:grid-cols-3">
@@ -137,6 +156,9 @@ function BankImportRowCard({ batch, row }: { readonly batch: BankImportBatch; re
 
 export function BankImportDetailPage({ batchId }: { readonly batchId: string }) {
   const queryClient = useQueryClient();
+  const nextRowRef = useRef<HTMLElement | null>(null);
+  const lastFocusedRow = useRef<string | null>(null);
+  const lastAutoFetchedPageCount = useRef<number | null>(null);
   const batch = useQuery({
     queryKey: queryKeys.bankImports.detail(batchId),
     queryFn: ({ signal }) => apiClient.get<BankImportBatch>(`/api/v1/bank-imports/${batchId}`, { signal }),
@@ -155,9 +177,58 @@ export function BankImportDetailPage({ batchId }: { readonly batchId: string }) 
     onRejected: async () => restartBankImportPagination(queryClient),
     onOutcomeUnknown: async () => restartBankImportPagination(queryClient),
   });
+  const items = rows.data?.pages.flatMap((page) => page.items) ?? [];
+  const nextUnresolved = items.find((row) => row.outcome === "pending" || row.outcome === "dismissed");
+  const loadedPageCount = rows.data?.pages.length ?? 0;
+
+  useEffect(() => {
+    if (nextUnresolved !== undefined) {
+      lastAutoFetchedPageCount.current = null;
+      return;
+    }
+    if (
+      batch.data === undefined ||
+      !shouldAutoFetchNextBankImportPage(items, {
+        batchOpen: batch.data.state === "open",
+        hasNextPage: rows.hasNextPage,
+        fetchingNextPage: rows.isFetchingNextPage,
+      }) ||
+      lastAutoFetchedPageCount.current === loadedPageCount
+    ) {
+      return;
+    }
+    lastAutoFetchedPageCount.current = loadedPageCount;
+    void rows.fetchNextPage();
+  }, [
+    batch.data,
+    items,
+    loadedPageCount,
+    nextUnresolved,
+    rows.fetchNextPage,
+    rows.hasNextPage,
+    rows.isFetchingNextPage,
+  ]);
+
+  useEffect(() => {
+    if (nextUnresolved === undefined || lastFocusedRow.current === nextUnresolved.id) return;
+    lastFocusedRow.current = nextUnresolved.id;
+    const frame = window.requestAnimationFrame(() => {
+      const target = nextRowRef.current;
+      if (target === null) return;
+      const reducedMotion =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      target.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "center" });
+      target.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [nextUnresolved?.id]);
+
   if (batch.isPending || rows.isPending) return <PageSkeleton rows={5} />;
   if (batch.isError || rows.isError) return <ErrorState onAction={() => void restartBankImportPagination(queryClient)} />;
-  const items = rows.data.pages.flatMap((page) => page.items);
+  const resolvedCount = batch.data.counts.confirmed + batch.data.counts.linked + batch.data.counts.skipped + batch.data.counts.cancelled;
+  const progressPercent = Math.floor((resolvedCount * 100) / batch.data.counts.total);
+
   return (
     <div className="bank-import-detail-page page-stack">
       <PageHeading
@@ -167,6 +238,13 @@ export function BankImportDetailPage({ batchId }: { readonly batchId: string }) 
         title={`Сверка · ${batch.data.counts.total} строк`}
       />
       <section className="surface-panel">
+        <div className="mb-5">
+          <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+            <span className="text-[var(--nm-muted)]">Разобрано {resolvedCount} из {batch.data.counts.total}</span>
+            <strong className="text-[var(--nm-text)]">{progressPercent}%</strong>
+          </div>
+          <div aria-label={`Разобрано ${progressPercent}% строк`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={progressPercent} className="h-2 overflow-hidden rounded-full bg-[var(--nm-line)]" role="progressbar"><span className="block h-full rounded-full bg-[var(--nm-accent)] transition-[width]" style={{ width: `${String(progressPercent)}%` }} /></div>
+        </div>
         <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
           <div><p className="text-[var(--nm-muted)]">Ожидают</p><p className="mt-1 text-xl font-semibold">{batch.data.counts.pending + batch.data.counts.staged}</p></div>
           <div><p className="text-[var(--nm-muted)]">Подтверждены</p><p className="mt-1 text-xl font-semibold">{batch.data.counts.confirmed}</p></div>
@@ -180,7 +258,7 @@ export function BankImportDetailPage({ batchId }: { readonly batchId: string }) 
       </section>
       {items.length === 0 ? <EmptyState title="Строк нет">Пакет не содержит доступных строк.</EmptyState> : (
         <section className="space-y-3" aria-live="polite">
-          {items.map((row) => <BankImportRowCard batch={batch.data} key={row.id} row={row} />)}
+          {items.map((row) => <BankImportRowCard batch={batch.data} key={row.id} row={row} {...(row.id === nextUnresolved?.id ? { targetRef: nextRowRef } : {})} />)}
           {rows.hasNextPage ? <div className="load-more"><button className="button button--secondary" disabled={rows.isFetchingNextPage} onClick={() => void rows.fetchNextPage()} type="button">{rows.isFetchingNextPage ? "Загружаем…" : "Показать ещё"}</button></div> : <p className="feed-end">Это все строки</p>}
         </section>
       )}

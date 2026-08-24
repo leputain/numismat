@@ -186,6 +186,7 @@ class SqlAlchemyTransactionEditTextTargetRepository:
                 base_currency=owner.base_currency,
                 default_account_id=owner.default_account_id,
                 fast_mode=owner.fast_mode,
+                settings_version=owner.settings_version,
             ),
             draft=_snapshot(draft),
             transaction=transaction,

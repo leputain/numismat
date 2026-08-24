@@ -10,10 +10,14 @@ The package version remains `0.45.0`; the M0/M1 platform foundation is unrelease
 
 - Accept commands only from a configured numeric allowlist in each actor's exact private Telegram chat; keep every allowed user's accounts, categories, drafts, transactions, budgets, schedules, rates, imports, sessions, and idempotency records isolated.
 - Parse expenses and income into positive integer minor units; never use `float` for money.
+- Accept a strict amount-only Telegram input and continue it through the same channel-neutral review draft in
+  Telegram or Mini App without asking for the amount twice.
 - Require an explicit review-and-save action before creating a transaction.
 - Generate due recurring operations only as review drafts from bounded daily/weekly/monthly schedules.
 - Manage accounts, categories, deterministic categorization rules, history, editing, soft deletion, restore, and audit-based undo.
 - Produce daily and monthly reports plus bounded CSV exports with spreadsheet-formula protection.
+- Provide owner-scoped transaction filters, budget forecast/status, and default-off privacy-safe Telegram
+  notifications with quiet hours and bounded delivery retries.
 - Process JPEG, PNG, and WebP images locally through Pillow and Tesseract `rus+eng` with conservative bounded parsing.
 - Preserve update idempotency and durable Telegram response delivery across process restarts.
 - Support encrypted Restic backups and isolated `_test` restore drills.
@@ -64,6 +68,11 @@ Architecture tests enforce dependency direction for the domain and application l
 - Alembic `0012_multitenant_integrity` fail-closed checks legacy rows and enforces private user/chat binding plus
   composite owner references for default accounts, category parents, audit transactions, recurring/import drafts,
   and Telegram outbox delivery.
+- Alembic `0013_settings_version` makes owner timezone changes optimistic-versioned while preserving immutable
+  timezone snapshots on existing schedules and budgets.
+- Alembic `0014_notifications` stores tenant-owned default-off preferences and privacy-safe deduplicated jobs. A
+  DB-only scheduler and a separately credentialed Telegram delivery process use bounded batches, leases, retries,
+  authoritative pre-send threshold checks, and 400-day bounded terminal retention.
 - Long polling runs as exactly one instance, processes updates sequentially, and advances the offset only after successful handling.
 - Business mutations and typed Telegram response outbox records commit atomically. External Telegram delivery remains honestly at-least-once in the narrow crash window after Telegram accepts a request but before `sent_at` is persisted.
 - Alembic `0005_channel_neutral_drafts` stores Telegram chat/message binding, rendered revision, and history/pending-history navigation context outside the business draft. Compact callbacks carry draft UUID/revision; the adapter validates the exact projected presentation under lock.
@@ -87,6 +96,9 @@ Architecture tests enforce dependency direction for the domain and application l
 - Before Telegram network I/O, require every outbox response that references a draft to match the recorded owner and
   immutable private chat. Fail closed without `sent_at` on mismatch and repeat the same owner/chat guard when binding
   the delivered Telegram presentation.
+- Notification queue rows must never contain amounts, currencies, names, descriptions, Telegram message text or
+  Telegram IDs. Delivery rechecks current allowlist, private chat, opt-in, quiet hours, reference ownership and the
+  authoritative budget threshold before network I/O.
 - Never commit secrets, real Telegram data, production exports, database dumps, private keys, or runtime credentials.
 - Never log tokens, credentials, Telegram IDs, financial amounts, currencies, descriptions, message text, OCR text, SQL, or database URLs.
 - Structured logs use bounded allowlisted event codes and metadata; free-form exception and traceback text is discarded.
@@ -121,7 +133,9 @@ FastAPI/Mini App surface, immutable private Telegram principals, per-user menus,
 page-scoped session binding with shared-cookie-safe error/logout and lifecycle handling, bounded WebView-Origin
 metadata plus CSRF/session/idempotency controls, bounded finance/catalog/budget reads and revision-safe writes,
 recurring schedules, explicit exchange rates, staged review-first bank CSV imports, and multi-tenant integrity through
-Alembic `0012`.
-The canonical OpenAPI contains 63 path items. Task21 completed the consolidated unit, PostgreSQL/cross-channel,
+Alembic `0012`. The current quick-capture/control-of-spending slice adds amount-only cross-channel drafts, filtered
+transactions with filter-bound cursors, account/category management, optimistic timezone settings, integer-only
+budget forecasts, and isolated notification scheduling/delivery through Alembic `0014`.
+The canonical OpenAPI contains 67 path items. Task21 completed the consolidated unit, PostgreSQL/cross-channel,
 migration, dependency, production-image, edge-security and encrypted recovery gates for the previous `0011`
-baseline; those results do not certify the new multi-user diff.
+baseline; the current slice requires its own final release gate before deployment.

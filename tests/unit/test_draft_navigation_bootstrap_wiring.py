@@ -90,13 +90,27 @@ def _payload() -> dict[str, object]:
     }
 
 
+def _amount_only_payload(amount_minor: int = 123_456) -> dict[str, object]:
+    return {
+        "flow": "quick",
+        "input_mode": "amount_only",
+        "amount_minor": amount_minor,
+    }
+
+
 def _receipt(
     state: str,
     *,
     action: DraftNavigationAction = DraftNavigationAction.BACK,
     choices: DraftNavigationChoices | None = None,
+    payload: dict[str, object] | None = None,
 ) -> DraftNavigationReceiptSnapshot:
-    draft = DraftSnapshot(DRAFT_ID, state, _payload(), revision=8)
+    draft = DraftSnapshot(
+        DRAFT_ID,
+        state,
+        _payload() if payload is None else payload,
+        revision=8,
+    )
     return DraftNavigationReceiptSnapshot(
         expected=DraftRef(DRAFT_ID, 7),
         result=DraftNavigationResult(
@@ -140,6 +154,75 @@ def test_navigation_renderer_uses_the_resulting_exact_draft_revision(state: str)
                     interaction = DraftInteraction.decode(button.callback_data)
                     assert interaction.draft_id == DRAFT_ID
                     assert interaction.revision == 8
+
+
+@pytest.mark.parametrize(
+    ("state", "progress"),
+    [
+        ("wizard_type", "1/5"),
+        ("wizard_category", "2/5"),
+        ("wizard_account", "3/5"),
+        ("wizard_date", "4/5"),
+        ("custom_date", "4/5"),
+        ("wizard_description", "5/5"),
+    ],
+)
+def test_amount_only_navigation_uses_the_short_five_step_progress(
+    state: str,
+    progress: str,
+) -> None:
+    rendered, next_draft = _draft_navigation_receipt(
+        _receipt(state, payload=_amount_only_payload())
+    )
+
+    assert f"· {progress}" in rendered.text
+    assert "/6" not in rendered.text
+    assert next_draft == DraftRef(DRAFT_ID, 8)
+
+
+@pytest.mark.parametrize(
+    ("state", "progress"),
+    [
+        ("wizard_type", "1/6"),
+        ("wizard_amount", "2/6"),
+        ("wizard_category", "3/6"),
+        ("wizard_account", "4/6"),
+        ("wizard_date", "5/6"),
+        ("custom_date", "5/6"),
+        ("wizard_description", "6/6"),
+    ],
+)
+def test_regular_wizard_navigation_keeps_the_six_step_progress(
+    state: str,
+    progress: str,
+) -> None:
+    payload = _payload()
+    payload["flow"] = "wizard"
+    rendered, _ = _draft_navigation_receipt(_receipt(state, payload=payload))
+
+    assert f"· {progress}" in rendered.text
+    assert "/5" not in rendered.text
+
+
+def test_amount_only_type_prompt_shows_amount_without_currency_and_versioned_actions() -> None:
+    rendered, _ = _draft_navigation_receipt(_receipt("wizard_type", payload=_amount_only_payload()))
+
+    assert "Сумма: <b>1 234,56</b>" in rendered.text
+    assert "Это расход или доход?" in rendered.text
+    assert all(value not in rendered.text for value in ("RUB", "₽", "USD", "$", "EUR", "€"))
+    assert rendered.reply_markup is not None
+    interactions = [
+        DraftInteraction.decode(button.callback_data)
+        for row in rendered.reply_markup.inline_keyboard
+        for button in row
+        if button.callback_data is not None
+    ]
+    assert {interaction.action for interaction in interactions} == {
+        DraftAction.SELECT_TYPE,
+        DraftAction.CANCEL,
+    }
+    assert all(interaction.draft_id == DRAFT_ID for interaction in interactions)
+    assert all(interaction.revision == 8 for interaction in interactions)
 
 
 def test_navigation_renderer_uses_typed_category_choices() -> None:
@@ -296,6 +379,18 @@ def _draft_ingress_snapshot(
     )
 
 
+def _amount_only_ingress_snapshot(*, message_id: int | None) -> DraftIngressReceiptSnapshot:
+    return DraftIngressReceiptSnapshot(
+        DraftIngressResult(
+            DraftIngressOperation.QUICK,
+            DraftIngressStatus.STARTED,
+            _owner(),
+            DraftSnapshot(DRAFT_ID, "wizard_type", _amount_only_payload(), revision=1),
+        ),
+        message_id,
+    )
+
+
 @pytest.mark.parametrize(
     ("operation", "status", "expected_text"),
     [
@@ -316,6 +411,31 @@ def test_draft_ingress_renderer_uses_only_the_resulting_exact_reference(
     assert expected_text.casefold() in rendered.text.casefold()
     assert draft == receipt.draft_ref
     assert "ui_message_id" not in receipt.result.draft.payload
+
+
+def test_amount_only_ingress_renders_the_short_type_prompt_without_currency() -> None:
+    receipt = _amount_only_ingress_snapshot(message_id=77)
+
+    rendered, draft = _draft_ingress_receipt(receipt)
+
+    assert "Новая операция · 1/5" in rendered.text
+    assert "Сумма: <b>1 234,56</b>" in rendered.text
+    assert "Это расход или доход?" in rendered.text
+    assert all(value not in rendered.text for value in ("RUB", "₽", "USD", "$", "EUR", "€"))
+    assert draft == DraftRef(DRAFT_ID, 1)
+    assert rendered.reply_markup is not None
+    interactions = [
+        DraftInteraction.decode(button.callback_data)
+        for row in rendered.reply_markup.inline_keyboard
+        for button in row
+        if button.callback_data is not None
+    ]
+    assert {interaction.action for interaction in interactions} == {
+        DraftAction.SELECT_TYPE,
+        DraftAction.CANCEL,
+    }
+    assert all(interaction.draft_id == DRAFT_ID for interaction in interactions)
+    assert all(interaction.revision == 1 for interaction in interactions)
 
 
 @pytest.mark.asyncio
@@ -341,6 +461,31 @@ async def test_draft_ingress_enqueuer_sends_or_edits_and_binds_exact_revision(
     assert session.added.message_id == message_id
     assert session.added.draft_id == receipt.draft_ref.draft_id
     assert session.added.draft_revision == receipt.draft_ref.revision
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message_id", [None, 77])
+async def test_amount_only_ingress_enqueuer_preserves_durable_binding(
+    message_id: int | None,
+) -> None:
+    session = _CaptureSession()
+    receipt = _amount_only_ingress_snapshot(message_id=message_id)
+
+    await _enqueue_draft_ingress_receipt(
+        cast(AsyncSession, session),
+        TelegramMutationRequest(91, 92, 93, "ru", "Europe/Moscow", "RUB"),
+        receipt,
+    )
+
+    assert session.added is not None
+    assert session.added.method == ("send_message" if message_id is None else "edit_message_text")
+    assert session.added.message_id == message_id
+    assert "Новая операция · 1/5" in session.added.body
+    assert "Сумма: <b>1 234,56</b>" in session.added.body
+    assert "RUB" not in session.added.body
+    assert session.added.reply_markup is not None
+    assert session.added.draft_id == DRAFT_ID
+    assert session.added.draft_revision == 1
 
 
 def _plain_receipt(operation: PlainDraftOperation) -> PlainDraftReceiptSnapshot:

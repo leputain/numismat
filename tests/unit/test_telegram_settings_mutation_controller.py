@@ -16,7 +16,6 @@ from finbot.adapters.telegram.controllers.settings_mutations import (
 )
 from finbot.adapters.telegram.controllers.settings_queries import SettingsCatalogTarget
 from finbot.adapters.telegram.executor import TelegramMutationExecutor, TelegramMutationRequest
-from finbot.adapters.telegram.ui import timezone_token
 from finbot.application.dto import (
     AccountSnapshot,
     DraftRef,
@@ -71,8 +70,19 @@ class _Sessions:
         return self.session
 
 
-def _owner_snapshot(timezone: str = "Europe/Moscow") -> OwnerSnapshot:
-    return OwnerSnapshot(OWNER_ID, "ru", timezone, "RUB", ACCOUNT_ID)
+def _owner_snapshot(
+    timezone: str = "Europe/Moscow",
+    *,
+    settings_version: int = 1,
+) -> OwnerSnapshot:
+    return OwnerSnapshot(
+        OWNER_ID,
+        "ru",
+        timezone,
+        "RUB",
+        ACCOUNT_ID,
+        settings_version=settings_version,
+    )
 
 
 def _account() -> AccountSnapshot:
@@ -129,7 +139,11 @@ class _Timezone:
     async def execute(self, command: ChangeTimezoneCommand) -> OwnerSnapshot:
         self.events.append("timezone.execute")
         self.commands.append(command)
-        return replace(_owner_snapshot(), timezone=command.timezone)
+        return replace(
+            _owner_snapshot(),
+            timezone=command.timezone,
+            settings_version=command.expected_version + 1,
+        )
 
 
 class _Reader:
@@ -374,21 +388,19 @@ async def test_timezone_mutation_preserves_exact_active_draft_in_receipt(
 
     receipt = await controller.timezone(
         TelegramSettingsMutationContext(_request(), 94_000_004),
-        parse_settings_timezone_callback(f"s:timezone:3:{timezone_token('Europe/Moscow')}"),
+        parse_settings_timezone_callback("s:timezone:3:1"),
     )
 
     assert receipt is receipts[0]
     assert receipt is not None
     assert receipt.draft_ref == DraftRef(DRAFT_ID, 8)
     assert "Asia/Yekaterinburg" in receipt.text
-    assert timezone.commands == [
-        ChangeTimezoneCommand(OWNER_ID, "Europe/Moscow", "Asia/Yekaterinburg")
-    ]
+    assert timezone.commands == [ChangeTimezoneCommand(OWNER_ID, 1, "Asia/Yekaterinburg")]
     assert events.index("outbox") < events.index("commit")
 
 
 @pytest.mark.asyncio
-async def test_stale_timezone_token_rolls_back_without_mutation_or_outbox(
+async def test_stale_timezone_version_rolls_back_without_mutation_or_outbox(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
@@ -406,7 +418,7 @@ async def test_stale_timezone_token_rolls_back_without_mutation_or_outbox(
     with pytest.raises(StaleSettingsTimezoneCallback):
         await controller.timezone(
             TelegramSettingsMutationContext(_request(), 94_000_004),
-            parse_settings_timezone_callback(f"s:timezone:3:{timezone_token('Asia/Omsk')}"),
+            parse_settings_timezone_callback("s:timezone:3:2"),
         )
 
     assert timezone.commands == []
@@ -416,7 +428,15 @@ async def test_stale_timezone_token_rolls_back_without_mutation_or_outbox(
 
 @pytest.mark.parametrize(
     "data",
-    ["", "s:timezone:", "s:timezone:-1:deadbeef", "s:timezone:99:deadbeefdeadbeef"],
+    [
+        "",
+        "s:timezone:",
+        "s:timezone:-1:1",
+        "s:timezone:99:1",
+        "s:timezone:1:0",
+        "s:timezone:1:01",
+        "s:timezone:1:2147483648",
+    ],
 )
 def test_timezone_parser_rejects_malformed_callbacks(data: str) -> None:
     with pytest.raises(InvalidSettingsMutationCallback):

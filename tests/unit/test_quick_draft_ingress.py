@@ -57,6 +57,15 @@ def _prepared(
     *,
     flow: str = "quick",
 ) -> PreparedDraftResult:
+    if state is DraftPreparationState.TYPE_REQUIRED:
+        return PreparedDraftResult(
+            state,
+            {
+                "flow": flow,
+                "input_mode": "amount_only",
+                "amount_minor": 145_000,
+            },
+        )
     return PreparedDraftResult(
         state,
         {

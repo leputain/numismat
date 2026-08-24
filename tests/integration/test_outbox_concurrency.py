@@ -158,7 +158,13 @@ async def test_second_delivery_waits_then_recovers_pending_after_first_rolls_bac
     factory = async_sessionmaker(engine, expire_on_commit=False)
     row_id = uuid7()
     async with factory() as setup:
-        setup.add(ProcessedUpdate(update_id=UPDATE_ID))
+        setup.add_all(
+            (
+                ProcessedUpdate(update_id=UPDATE_ID),
+                User(telegram_user_id=OWNER_ID, telegram_chat_id=OWNER_ID),
+            )
+        )
+        await setup.flush()
         setup.add(
             TelegramResponseOutbox(
                 id=row_id,
@@ -226,5 +232,6 @@ async def test_second_delivery_waits_then_recovers_pending_after_first_rolls_bac
             await cleanup.execute(
                 delete(ProcessedUpdate).where(ProcessedUpdate.update_id == UPDATE_ID)
             )
+            await cleanup.execute(delete(User).where(User.telegram_user_id == OWNER_ID))
             await cleanup.commit()
         await engine.dispose()

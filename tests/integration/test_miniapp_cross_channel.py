@@ -151,21 +151,35 @@ def _opaque_token() -> str:
 
 async def _cleanup(factory: async_sessionmaker[AsyncSession]) -> None:
     async with factory.begin() as session:
+        await session.execute(
+            text(
+                "DELETE FROM telegram_response_outbox "
+                "WHERE update_id BETWEEN :first_update AND :last_update"
+            ),
+            {"first_update": UPDATE_BASE, "last_update": UPDATE_BASE + 99},
+        )
+        await session.execute(
+            text(
+                "DELETE FROM processed_updates "
+                "WHERE update_id BETWEEN :first_update AND :last_update"
+            ),
+            {"first_update": UPDATE_BASE, "last_update": UPDATE_BASE + 99},
+        )
         owner_id = await session.scalar(
             text("SELECT id FROM users WHERE telegram_user_id = :telegram_user_id"),
             {"telegram_user_id": OWNER_TELEGRAM_USER_ID},
         )
         if owner_id is not None:
             await session.execute(
+                text("UPDATE users SET default_account_id = NULL WHERE id = :owner_id"),
+                {"owner_id": owner_id},
+            )
+            await session.execute(
                 text("DELETE FROM http_idempotency WHERE user_id = :owner_id"),
                 {"owner_id": owner_id},
             )
             await session.execute(
                 text("DELETE FROM web_sessions WHERE user_id = :owner_id"),
-                {"owner_id": owner_id},
-            )
-            await session.execute(
-                text("UPDATE users SET default_account_id = NULL WHERE id = :owner_id"),
                 {"owner_id": owner_id},
             )
             for table_name in (
@@ -184,20 +198,6 @@ async def _cleanup(factory: async_sessionmaker[AsyncSession]) -> None:
                 text("DELETE FROM users WHERE id = :owner_id"),
                 {"owner_id": owner_id},
             )
-        await session.execute(
-            text(
-                "DELETE FROM telegram_response_outbox "
-                "WHERE update_id BETWEEN :first_update AND :last_update"
-            ),
-            {"first_update": UPDATE_BASE, "last_update": UPDATE_BASE + 99},
-        )
-        await session.execute(
-            text(
-                "DELETE FROM processed_updates "
-                "WHERE update_id BETWEEN :first_update AND :last_update"
-            ),
-            {"first_update": UPDATE_BASE, "last_update": UPDATE_BASE + 99},
-        )
 
 
 async def _draft(
@@ -256,10 +256,10 @@ async def test_draft_handoff_is_cross_channel_and_mobile_retry_is_idempotent() -
     try:
         await dispatcher.feed_update(
             bot,
-            _message_update(bot, UPDATE_BASE, 1, "778 ресторан"),
+            _message_update(bot, UPDATE_BASE, 1, "778"),
         )
         telegram_draft_id, state, telegram_revision, suspended = await _draft(factory)
-        assert (state, suspended) == ("review", False)
+        assert (state, suspended) == ("wizard_type", False)
 
         async with factory.begin() as session:
             owner_id = await session.scalar(
@@ -267,6 +267,26 @@ async def test_draft_handoff_is_cross_channel_and_mobile_retry_is_idempotent() -
                 {"telegram_user_id": OWNER_TELEGRAM_USER_ID},
             )
             assert owner_id is not None
+            account = (
+                await session.execute(
+                    text(
+                        "SELECT id, version FROM accounts "
+                        "WHERE user_id = :owner_id AND archived_at IS NULL "
+                        "ORDER BY created_at, id LIMIT 1"
+                    ),
+                    {"owner_id": owner_id},
+                )
+            ).one()
+            category = (
+                await session.execute(
+                    text(
+                        "SELECT id, version FROM categories "
+                        "WHERE user_id = :owner_id AND kind = 'expense' "
+                        "AND archived_at IS NULL ORDER BY created_at, id LIMIT 1"
+                    ),
+                    {"owner_id": owner_id},
+                )
+            ).one()
             await SqlAlchemyWebSessionRepository(session).create(
                 owner_id,
                 digester.session(session_token),
@@ -298,6 +318,72 @@ async def test_draft_handoff_is_cross_channel_and_mobile_retry_is_idempotent() -
             )
             assert active.status_code == 200
             assert active.json()["draft"]["id"] == str(telegram_draft_id)
+            assert active.json()["draft"]["state"] == "wizard_type"
+            assert active.json()["draft"]["transaction"]["amount_minor"] == "77800"
+
+            async def advance(body: dict[str, object]) -> dict[str, Any]:
+                response = await client.patch(
+                    f"/api/v1/drafts/{telegram_draft_id}",
+                    headers={
+                        "Cookie": cookie,
+                        "Idempotency-Key": _opaque_token(),
+                        "Origin": ORIGIN,
+                        "X-CSRF-Token": csrf_token,
+                        "X-Session-Binding": session_binding,
+                    },
+                    json=body,
+                )
+                assert response.status_code == 200
+                return cast(dict[str, Any], response.json())
+
+            selected_type = await advance(
+                {
+                    "revision": telegram_revision,
+                    "action": "select_type",
+                    "value": "expense",
+                }
+            )
+            revision = int(selected_type["result"]["revision"])
+            selected_category = await advance(
+                {
+                    "revision": revision,
+                    "action": "select_category",
+                    "selection": {
+                        "kind": "existing",
+                        "id": str(category.id),
+                        "version": category.version,
+                    },
+                }
+            )
+            revision = int(selected_category["result"]["revision"])
+            selected_account = await advance(
+                {
+                    "revision": revision,
+                    "action": "select_account",
+                    "selection": {
+                        "kind": "existing",
+                        "id": str(account.id),
+                        "version": account.version,
+                    },
+                }
+            )
+            revision = int(selected_account["result"]["revision"])
+            selected_date = await advance(
+                {"revision": revision, "action": "select_date", "value": "today"}
+            )
+            revision = int(selected_date["result"]["revision"])
+            skipped_description = await advance(
+                {"revision": revision, "action": "skip_description"}
+            )
+            telegram_revision = int(skipped_description["result"]["revision"])
+
+            ready = await client.get(
+                "/api/v1/drafts/active",
+                headers={"Cookie": cookie, "X-Session-Binding": session_binding},
+            )
+            assert ready.status_code == 200
+            assert ready.json()["draft"]["state"] == "wizard_confirm"
+            assert ready.json()["draft"]["transaction"]["amount_minor"] == "77800"
 
             confirm_headers = {
                 "Cookie": cookie,
@@ -327,11 +413,15 @@ async def test_draft_handoff_is_cross_channel_and_mobile_retry_is_idempotent() -
                 "X-CSRF-Token": csrf_token,
                 "X-Session-Binding": session_binding,
             }
-            created = await client.post("/api/v1/drafts", headers=create_headers, json={})
-            retried_create = await client.post(
-                "/api/v1/drafts",
+            created = await client.post(
+                "/api/v1/drafts/quick",
                 headers=create_headers,
-                json={},
+                json={"text": "889"},
+            )
+            retried_create = await client.post(
+                "/api/v1/drafts/quick",
+                headers=create_headers,
+                json={"text": "889"},
             )
             assert created.status_code == retried_create.status_code == 201
             assert created.json() == retried_create.json()
@@ -366,6 +456,10 @@ async def test_draft_handoff_is_cross_channel_and_mobile_retry_is_idempotent() -
         assert resumed_suspended is False
 
         async with factory() as verification:
+            reverse_payload = await verification.scalar(
+                text("SELECT payload FROM drafts WHERE id = :draft_id"),
+                {"draft_id": miniapp_draft_id},
+            )
             transaction_count = await verification.scalar(
                 text(
                     "SELECT count(*) FROM transactions JOIN users "
@@ -374,6 +468,10 @@ async def test_draft_handoff_is_cross_channel_and_mobile_retry_is_idempotent() -
                 ),
                 {"telegram_user_id": OWNER_TELEGRAM_USER_ID},
             )
+        assert isinstance(reverse_payload, dict)
+        assert reverse_payload["flow"] == "quick"
+        assert reverse_payload["input_mode"] == "amount_only"
+        assert reverse_payload["amount_minor"] == 88_900
         assert transaction_count == 1
     finally:
         await _cleanup(factory)

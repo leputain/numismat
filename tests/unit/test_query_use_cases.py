@@ -11,6 +11,7 @@ from finbot.application.dto import (
     OwnerSnapshot,
     TimeSeriesGrain,
     TransactionCursor,
+    TransactionListFilters,
     TransactionSnapshot,
 )
 from finbot.application.errors import (
@@ -130,6 +131,98 @@ async def test_cursor_transactions_use_occurred_at_and_uuid_without_offset() -> 
     assert second_page.has_more is False
     assert "2026" not in repr(anchor)
     assert str(anchor.transaction_id) not in repr(anchor)
+
+
+@pytest.mark.asyncio
+async def test_cursor_transactions_apply_all_owner_scoped_filters_before_limit() -> None:
+    owner_id = uuid7()
+    other_owner_id = uuid7()
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    end = datetime(2026, 9, 1, tzinfo=UTC)
+    account_id = uuid7()
+    category_id = uuid7()
+    target = _transaction(
+        occurred_at=start + timedelta(days=1),
+        account_id=account_id,
+        category_id=category_id,
+    )
+    excluded = (
+        _transaction(
+            occurred_at=start - timedelta(seconds=1),
+            account_id=account_id,
+            category_id=category_id,
+        ),
+        _transaction(
+            occurred_at=start + timedelta(days=1),
+            kind=TransactionType.INCOME,
+            account_id=account_id,
+            category_id=category_id,
+        ),
+        _transaction(
+            occurred_at=start + timedelta(days=1),
+            currency="USD",
+            account_id=account_id,
+            category_id=category_id,
+        ),
+        _transaction(
+            occurred_at=start + timedelta(days=1),
+            account_id=uuid7(),
+            category_id=category_id,
+        ),
+        _transaction(
+            occurred_at=start + timedelta(days=1),
+            account_id=account_id,
+            category_id=uuid7(),
+        ),
+    )
+    repository = InMemoryQueryRepository(
+        transactions={
+            owner_id: (target, *excluded),
+            other_owner_id: (target,),
+        }
+    )
+
+    page = await ListTransactionsByCursor(repository)(
+        owner_id,
+        limit=100,
+        filters=TransactionListFilters(
+            start=start,
+            end=end,
+            kind=TransactionType.EXPENSE,
+            account_id=account_id,
+            category_id=category_id,
+            currency="RUB",
+        ),
+    )
+
+    assert tuple(item.transaction for item in page.items) == (target,)
+    assert not page.has_more
+
+
+def test_transaction_list_filters_are_immutable_bounded_and_repr_safe() -> None:
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    filters = TransactionListFilters(
+        start=start,
+        end=start + timedelta(days=1),
+        account_id=uuid7(),
+        category_id=uuid7(),
+        currency="RUB",
+    )
+
+    assert not filters.is_empty
+    assert "2026" not in repr(filters)
+    assert str(filters.account_id) not in repr(filters)
+    assert TransactionListFilters().is_empty
+    with pytest.raises(FrozenInstanceError):
+        filters.currency = "USD"
+    for invalid in (
+        {"start": start},
+        {"start": datetime(2026, 8, 1), "end": datetime(2026, 8, 2)},
+        {"start": start, "end": start},
+        {"currency": "rub"},
+    ):
+        with pytest.raises((TypeError, ValueError)):
+            TransactionListFilters(**invalid)
 
 
 @pytest.mark.asyncio

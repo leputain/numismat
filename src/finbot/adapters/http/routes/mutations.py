@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from datetime import date, time
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -35,11 +36,15 @@ from finbot.adapters.http.mutations.service import (
 )
 from finbot.adapters.http.schemas.common import ApiErrorResponse
 from finbot.adapters.http.schemas.mutations import (
+    COMPOSE_DRAFT_ADAPTER,
     DRAFT_PATCH_ADAPTER,
     EMPTY_MUTATION_ADAPTER,
+    QUICK_DRAFT_ADAPTER,
     REVISION_MUTATION_ADAPTER,
+    TIMEZONE_SETTINGS_ADAPTER,
     VERSION_MUTATION_ADAPTER,
     ActiveDraftResponse,
+    ComposeDraftRequest,
     DraftPatchRequest,
     DraftResponse,
     ExistingSelectionRequest,
@@ -54,7 +59,14 @@ from finbot.adapters.http.schemas.mutations import (
     draft_response,
     mutation_response,
 )
-from finbot.application.draft_navigation import DraftCatalogChoice, DraftDateChoice
+from finbot.adapters.http.schemas.settings import (
+    NOTIFICATION_PREFERENCES_ADAPTER,
+    NotificationPreferencesRequest,
+    NotificationPreferencesResponse,
+    notification_preferences_response,
+)
+from finbot.application.draft_composition import ComposeDraftSpec
+from finbot.application.draft_navigation import DraftCatalogChoice, DraftCatalogRef, DraftDateChoice
 from finbot.application.draft_rules import DraftRuleAction
 from finbot.application.draft_views import project_public_draft
 from finbot.application.dto import DraftRef, DraftSnapshot
@@ -63,6 +75,8 @@ from finbot.application.revision_mutations import (
     DraftPatchAction,
     DraftPatchSpec,
 )
+from finbot.domain.money import MoneyError, parse_minor
+from finbot.domain.notifications import NotificationPreferences
 from finbot.domain.transactions import TransactionType
 
 _SESSION_SECURITY: dict[str, Any] = {
@@ -227,6 +241,54 @@ def _expected(draft_id: UUID, revision: int) -> DraftRef:
     return DraftRef(draft_id, revision)
 
 
+def _compose_reference(value: ExistingSelectionRequest | None) -> DraftCatalogRef | None:
+    if value is None:
+        return None
+    return DraftCatalogRef(canonical_uuid(value.id), value.version)
+
+
+def _compose_spec(body: ComposeDraftRequest) -> ComposeDraftSpec:
+    try:
+        amount_minor = parse_minor(body.amount)
+        occurred_on = date.fromisoformat(body.occurred_on) if body.occurred_on is not None else None
+    except (MoneyError, ValueError) as exc:
+        raise HttpApiError(
+            status_code=422,
+            code=HttpErrorCode.VALIDATION_FAILED,
+        ) from exc
+    return ComposeDraftSpec(
+        kind=TransactionType(body.type),
+        amount_minor=amount_minor,
+        account=_compose_reference(body.account),
+        category=_compose_reference(body.category),
+        occurred_on=occurred_on,
+        description=body.description,
+    )
+
+
+def _notification_preferences(
+    body: NotificationPreferencesRequest,
+) -> NotificationPreferences:
+    try:
+        return NotificationPreferences(
+            budget_80_enabled=body.budget_80_enabled,
+            budget_100_enabled=body.budget_100_enabled,
+            recurring_ready_enabled=body.recurring_ready_enabled,
+            weekly_digest_enabled=body.weekly_digest_enabled,
+            quiet_start=(
+                time.fromisoformat(body.quiet_start) if body.quiet_start is not None else None
+            ),
+            quiet_end=time.fromisoformat(body.quiet_end) if body.quiet_end is not None else None,
+            weekly_weekday=body.weekly_weekday,
+            weekly_time=time.fromisoformat(body.weekly_time),
+        )
+    except ValueError as exc:
+        raise HttpApiError(
+            status_code=422,
+            code=HttpErrorCode.VALIDATION_FAILED,
+        ) from exc
+
+
 def _patch_spec(draft_id: UUID, body: DraftPatchRequest) -> DraftPatchSpec:
     expected = _expected(draft_id, body.revision)
     action = DraftPatchAction(body.action)
@@ -271,6 +333,60 @@ def mutation_router(
     router = APIRouter(prefix="/api/v1", tags=["mutations"])
 
     @router.get(
+        "/settings/notifications",
+        response_model=NotificationPreferencesResponse,
+        responses=_error_responses(401, 422),
+        openapi_extra=_SESSION_SECURITY,
+    )
+    async def notification_preferences(
+        request: Request,
+    ) -> NotificationPreferencesResponse:
+        strict_query(request, allowed=frozenset())
+        snapshot = await _safe_read(request, service.notification_preferences)
+        return notification_preferences_response(snapshot)
+
+    @router.put(
+        "/settings/notifications",
+        status_code=204,
+        responses=_error_responses(401, 403, 409, 413, 415, 422),
+        openapi_extra=_mutation_openapi(NOTIFICATION_PREFERENCES_ADAPTER),
+    )
+    async def replace_notification_preferences(request: Request) -> Response:
+        strict_query(request, allowed=frozenset())
+        credentials = mutation_credentials(request, expected_origin=expected_origin)
+        body = await bounded_json_body(request, NOTIFICATION_PREFERENCES_ADAPTER)
+        preferences = _notification_preferences(body)
+        return _response(
+            await _safe_mutation(
+                lambda: service.replace_notification_preferences(
+                    credentials,
+                    preferences,
+                    body.version,
+                )
+            )
+        )
+
+    @router.put(
+        "/settings/timezone",
+        status_code=204,
+        responses=_error_responses(401, 403, 409, 413, 415, 422),
+        openapi_extra=_mutation_openapi(TIMEZONE_SETTINGS_ADAPTER),
+    )
+    async def change_timezone(request: Request) -> Response:
+        strict_query(request, allowed=frozenset())
+        credentials = mutation_credentials(request, expected_origin=expected_origin)
+        body = await bounded_json_body(request, TIMEZONE_SETTINGS_ADAPTER)
+        return _response(
+            await _safe_mutation(
+                lambda: service.change_timezone(
+                    credentials,
+                    body.timezone,
+                    body.version,
+                )
+            )
+        )
+
+    @router.get(
         "/drafts/active",
         response_model=ActiveDraftResponse,
         responses=_error_responses(401, 422),
@@ -281,6 +397,40 @@ def mutation_router(
         draft = await _safe_read(request, service.active_draft)
         return ActiveDraftResponse(
             draft=draft_response(project_public_draft(draft)) if draft is not None else None
+        )
+
+    @router.post(
+        "/drafts/quick",
+        response_model=MutationResponse,
+        responses={
+            201: {"model": MutationResponse},
+            **_error_responses(401, 403, 409, 413, 415, 422),
+        },
+        openapi_extra=_mutation_openapi(QUICK_DRAFT_ADAPTER),
+    )
+    async def begin_quick_draft(request: Request) -> Response:
+        strict_query(request, allowed=frozenset())
+        credentials = mutation_credentials(request, expected_origin=expected_origin)
+        body = await bounded_json_body(request, QUICK_DRAFT_ADAPTER)
+        return _response(
+            await _safe_mutation(lambda: service.begin_quick_draft(credentials, body.text))
+        )
+
+    @router.post(
+        "/drafts/compose",
+        response_model=MutationResponse,
+        responses={
+            201: {"model": MutationResponse},
+            **_error_responses(401, 403, 409, 413, 415, 422),
+        },
+        openapi_extra=_mutation_openapi(COMPOSE_DRAFT_ADAPTER),
+    )
+    async def compose_draft(request: Request) -> Response:
+        strict_query(request, allowed=frozenset())
+        credentials = mutation_credentials(request, expected_origin=expected_origin)
+        body = await bounded_json_body(request, COMPOSE_DRAFT_ADAPTER)
+        return _response(
+            await _safe_mutation(lambda: service.compose_draft(credentials, _compose_spec(body)))
         )
 
     @router.get(

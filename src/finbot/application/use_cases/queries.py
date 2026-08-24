@@ -4,6 +4,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from finbot.application.dto import (
+    EMPTY_TRANSACTION_LIST_FILTERS,
     AccountSnapshot,
     CategorySnapshot,
     CategoryTotalSnapshot,
@@ -20,6 +21,7 @@ from finbot.application.dto import (
     TimeSeriesSnapshot,
     TransactionCursor,
     TransactionCursorPageSnapshot,
+    TransactionListFilters,
     TransactionPageSnapshot,
     TransactionSnapshot,
 )
@@ -219,12 +221,14 @@ class ListTransactionsByCursor:
         *,
         cursor: TransactionCursor | None = None,
         limit: int = 20,
+        filters: TransactionListFilters = EMPTY_TRANSACTION_LIST_FILTERS,
     ) -> TransactionCursorPageSnapshot:
         safe_limit = _validated_limit(limit, field="Размер страницы")
         fetched = await self._reader.list_transactions_after(
             owner_id,
             cursor=cursor,
             limit=safe_limit + 1,
+            filters=filters,
         )
         return TransactionCursorPageSnapshot(
             items=tuple(fetched[:safe_limit]),

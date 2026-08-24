@@ -367,6 +367,7 @@ from finbot.application.transaction_edit_text_input import (
 from finbot.application.undo import UndoAction
 from finbot.application.use_cases.bank_imports import BankImportPreparer, BankImportUseCases
 from finbot.application.use_cases.catalogs import CatalogUseCases
+from finbot.application.use_cases.draft_composition import PrepareComposedDraft
 from finbot.application.use_cases.draft_conflicts import (
     PrepareDraftConflictReplacement,
     ResolveDraftConflict,
@@ -413,9 +414,11 @@ from finbot.application.use_cases.transaction_edit_text_input import (
 from finbot.application.use_cases.transactions import TransactionUseCases
 from finbot.application.use_cases.undo import UndoLastAction
 from finbot.config import Settings
+from finbot.domain.money import MoneyError, validate_minor
 from finbot.domain.transactions import TransactionType
 
 PAGE_SIZE = 5
+_AMOUNT_ONLY_INPUT_MODE = "amount_only"
 
 
 def _currency_code(value: object, fallback: str) -> str:
@@ -429,6 +432,34 @@ def wizard_summary(payload: dict[str, object], fallback_currency: str, timezone:
     """Render the currency of the selected account, with a pre-selection fallback."""
     return _ocr_batch_header(payload) + render_wizard_summary(
         payload, _currency_code(payload.get("currency"), fallback_currency), timezone
+    )
+
+
+def _is_amount_only_draft(payload: dict[str, object]) -> bool:
+    return (
+        payload.get("flow") == DraftIngressOperation.QUICK.value
+        and payload.get("input_mode") == _AMOUNT_ONLY_INPUT_MODE
+    )
+
+
+def _amount_without_currency(payload: dict[str, object]) -> str:
+    amount = payload.get("amount_minor")
+    if isinstance(amount, bool) or not isinstance(amount, int):
+        raise ValueError("Amount-only draft amount is invalid")
+    try:
+        validated = validate_minor(amount)
+    except MoneyError:
+        raise ValueError("Amount-only draft amount is invalid") from None
+    major, fraction = divmod(validated, 100)
+    grouped = f"{major:,}".replace(",", " ")
+    return grouped if fraction == 0 else f"{grouped},{fraction:02d}"
+
+
+def _amount_only_type_prompt(payload: dict[str, object]) -> str:
+    return (
+        "<b>Новая операция · 1/5</b>\n\n"
+        f"Сумма: <b>{_amount_without_currency(payload)}</b>\n\n"
+        "Это расход или доход?"
     )
 
 
@@ -818,6 +849,13 @@ def _quick_draft_preparer(session: TelegramMutationSession) -> PrepareQuickDraft
     )
 
 
+def _composed_draft_preparer(session: TelegramMutationSession) -> PrepareComposedDraft:
+    return PrepareComposedDraft(
+        SqlAlchemyQueryRepository(session),
+        SqlAlchemyDraftNavigationCatalogRepository(session),
+    )
+
+
 def _local_ai_draft_session_use_cases(
     session: TelegramMutationSession,
 ) -> LocalAiDraftSessionUseCases:
@@ -867,6 +905,7 @@ def _draft_conflict_session_use_cases(
             PrepareDraftConflictReplacement(
                 _quick_draft_preparer(session),
                 SqlAlchemyDraftConflictReplacementTargets(session),
+                compose_drafts=_composed_draft_preparer(session),
             ),
         ),
         get_owner_settings=GetOwnerSettings(reader),
@@ -1410,7 +1449,11 @@ def _draft_navigation_receipt(
     payload = dict(draft.payload)
     if state == "wizard_type":
         rendered = _CallbackMutationReceipt(
-            "<b>Новая операция · 1/6</b>\n\nЭто расход или доход?",
+            (
+                _amount_only_type_prompt(payload)
+                if _is_amount_only_draft(payload)
+                else "<b>Новая операция · 1/6</b>\n\nЭто расход или доход?"
+            ),
             wizard_type_keyboard(draft.draft_id, draft.revision),
         )
     elif state == "wizard_amount":
@@ -1433,10 +1476,13 @@ def _draft_navigation_receipt(
             Choice(item.category_id, item.name, item.emoji, item.version)
             for item in result.choices.categories
         ]
-        text = {
-            "wizard_category": "<b>Новая операция · 3/6</b>\n\nВыберите категорию:",
-            "review_category": "<b>Изменить категорию</b>\n\nВыберите категорию:",
-        }.get(state, "<b>Уточните категорию</b>\n\nВыберите категорию:")
+        if state == "wizard_category" and _is_amount_only_draft(payload):
+            text = "<b>Новая операция · 2/5</b>\n\nВыберите категорию:"
+        else:
+            text = {
+                "wizard_category": "<b>Новая операция · 3/6</b>\n\nВыберите категорию:",
+                "review_category": "<b>Изменить категорию</b>\n\nВыберите категорию:",
+            }.get(state, "<b>Уточните категорию</b>\n\nВыберите категорию:")
         rendered = _CallbackMutationReceipt(
             text,
             category_keyboard(
@@ -1456,10 +1502,13 @@ def _draft_navigation_receipt(
             Choice(item.account_id, item.name, version=item.version)
             for item in result.choices.accounts
         ]
-        text = {
-            "wizard_account": "<b>Новая операция · 4/6</b>\n\nНа какой счёт записать?",
-            "review_account": "<b>Изменить счёт</b>\n\nВыберите счёт:",
-        }.get(state, "<b>Уточните счёт</b>\n\nВыберите счёт:")
+        if state == "wizard_account" and _is_amount_only_draft(payload):
+            text = "<b>Новая операция · 3/5</b>\n\nНа какой счёт записать?"
+        else:
+            text = {
+                "wizard_account": "<b>Новая операция · 4/6</b>\n\nНа какой счёт записать?",
+                "review_account": "<b>Изменить счёт</b>\n\nВыберите счёт:",
+            }.get(state, "<b>Уточните счёт</b>\n\nВыберите счёт:")
         rendered = _CallbackMutationReceipt(
             text,
             account_keyboard(choices, draft_id=draft.draft_id, revision=draft.revision),
@@ -1471,13 +1520,21 @@ def _draft_navigation_receipt(
         )
     elif state == "wizard_date":
         rendered = _CallbackMutationReceipt(
-            "<b>Новая операция · 5/6</b>\n\nКогда произошла операция?",
+            (
+                "<b>Новая операция · 4/5</b>\n\nКогда произошла операция?"
+                if _is_amount_only_draft(payload)
+                else "<b>Новая операция · 5/6</b>\n\nКогда произошла операция?"
+            ),
             wizard_date_keyboard(draft.draft_id, draft.revision),
         )
     elif state == "custom_date":
         rendered = _CallbackMutationReceipt(
-            "<b>Новая операция · 5/6</b>\n\n"
-            "Введите дату: <code>ДД.ММ</code> или <code>ДД.ММ.ГГГГ</code>.",
+            (
+                "<b>Новая операция · 4/5</b>\n\n"
+                if _is_amount_only_draft(payload)
+                else "<b>Новая операция · 5/6</b>\n\n"
+            )
+            + "Введите дату: <code>ДД.ММ</code> или <code>ДД.ММ.ГГГГ</code>.",
             wizard_input_keyboard(draft.draft_id, draft.revision),
         )
     elif state == "review_date":
@@ -1497,9 +1554,13 @@ def _draft_navigation_receipt(
             "<b>Комментарий</b>\n\nВведите комментарий. "
             "Отправьте дефис <code>-</code>, чтобы очистить."
             if result.action is ApplicationDraftNavigationAction.EDIT_DESCRIPTION
-            else "<b>Новая операция · 6/6</b>\n\n"
-            "Введите комментарий или нажмите «Без комментария»."
-            f"{current_text}"
+            else (
+                "<b>Новая операция · 5/5</b>\n\n"
+                if _is_amount_only_draft(payload)
+                else "<b>Новая операция · 6/6</b>\n\n"
+            )
+            + "Введите комментарий или нажмите «Без комментария»."
+            + current_text
         )
         rendered = _CallbackMutationReceipt(
             prompt,
@@ -1614,6 +1675,16 @@ def _draft_ingress_receipt(
     elif result.operation is DraftIngressOperation.WIZARD:
         rendered = _CallbackMutationReceipt(
             "<b>Новая операция · 1/6</b>\n\nЭто расход или доход?",
+            wizard_type_keyboard(draft.draft_id, draft.revision),
+        )
+    elif (
+        result.operation is DraftIngressOperation.QUICK
+        and draft.state == "wizard_type"
+        and _is_amount_only_draft(dict(draft.payload))
+    ):
+        payload = dict(draft.payload)
+        rendered = _CallbackMutationReceipt(
+            _amount_only_type_prompt(payload),
             wizard_type_keyboard(draft.draft_id, draft.revision),
         )
     else:

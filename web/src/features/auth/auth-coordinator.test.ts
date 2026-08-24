@@ -9,6 +9,7 @@ const SESSION: AuthSession = {
   locale: "ru",
   timezone: "Europe/Moscow",
   baseCurrency: "RUB",
+  settingsVersion: 1,
   expiresAt: "2030-01-01T00:00:00Z",
 };
 
@@ -160,6 +161,28 @@ describe("AuthCoordinator", () => {
     expect(getSession).toHaveBeenCalledWith({ retry: false });
     expect(value.clear).toHaveBeenCalledTimes(1);
     expect(value.clearView).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes optimistic settings in place and keeps unknown-outcome retry mounted", async () => {
+    const authenticate = vi.fn<AuthApi["authenticate"]>().mockResolvedValue(SESSION);
+    const getSession = vi
+      .fn<AuthApi["getSession"]>()
+      .mockResolvedValueOnce({ ...SESSION, timezone: "Europe/Samara", settingsVersion: 2 })
+      .mockRejectedValueOnce(new NetworkError());
+    const value = coordinator({ getSession, authenticate, logout: vi.fn() });
+
+    await value.value.start();
+    await expect(value.value.refreshAuthenticatedSession()).resolves.toMatchObject({
+      status: "authenticated",
+      session: { timezone: "Europe/Samara", settingsVersion: 2 },
+    });
+    await expect(value.value.refreshAuthenticatedSession()).resolves.toMatchObject({
+      status: "authenticated",
+    });
+
+    expect(getSession).toHaveBeenCalledTimes(2);
+    expect(value.clear).toHaveBeenCalledOnce();
+    expect(value.clearView).not.toHaveBeenCalled();
   });
 
   it("requires reopen when the preserved binding no longer matches the shared cookie", async () => {

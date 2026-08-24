@@ -102,6 +102,14 @@ def _callback_update(update_id: int, message_id: int, callback_data: str) -> dic
 
 async def _cleanup_database(factory: async_sessionmaker[Any]) -> None:
     async with factory() as session:
+        await session.execute(
+            text("DELETE FROM telegram_response_outbox WHERE update_id BETWEEN :first AND :last"),
+            {"first": UPDATE_BASE, "last": UPDATE_BASE + 100},
+        )
+        await session.execute(
+            text("DELETE FROM processed_updates WHERE update_id BETWEEN :first AND :last"),
+            {"first": UPDATE_BASE, "last": UPDATE_BASE + 100},
+        )
         user_id = await session.scalar(
             text("SELECT id FROM users WHERE telegram_user_id = :telegram_id"),
             {"telegram_id": OWNER_ID},
@@ -126,10 +134,6 @@ async def _cleanup_database(factory: async_sessionmaker[Any]) -> None:
             await session.execute(
                 text("DELETE FROM users WHERE id = :user_id"), {"user_id": user_id}
             )
-        await session.execute(
-            text("DELETE FROM processed_updates WHERE update_id BETWEEN :first AND :last"),
-            {"first": UPDATE_BASE, "last": UPDATE_BASE + 100},
-        )
         await session.commit()
 
 

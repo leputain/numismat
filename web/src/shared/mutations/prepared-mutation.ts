@@ -19,7 +19,7 @@ interface MutationIntent<TResponse, TContext> {
 }
 
 interface PreparedMutationOptions<TResponse, TContext> {
-  readonly eventScope: "bank_import" | "budget" | "draft" | "exchange_rate" | "recurring" | "transaction";
+  readonly eventScope: "bank_import" | "budget" | "catalog" | "draft" | "exchange_rate" | "recurring" | "settings" | "transaction";
   onSuccess(response: TResponse, context: TContext): void | Promise<void>;
   onRejected(error: unknown, context: TContext): void | Promise<void>;
   onOutcomeUnknown(context: TContext): void | Promise<void>;
@@ -79,7 +79,7 @@ export function usePreparedMutation<TResponse, TContext>(
 }
 
 function actionEvent(
-  scope: "bank_import" | "budget" | "draft" | "exchange_rate" | "recurring" | "transaction",
+  scope: "bank_import" | "budget" | "catalog" | "draft" | "exchange_rate" | "recurring" | "settings" | "transaction",
   outcome: "completed" | "rejected" | "started",
 ) {
   return `${scope}_action_${outcome}` as const;

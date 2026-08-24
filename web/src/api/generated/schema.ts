@@ -518,6 +518,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/drafts/compose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Compose Draft */
+        post: operations["compose_draft_api_v1_drafts_compose_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/drafts/quick": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Begin Quick Draft */
+        post: operations["begin_quick_draft_api_v1_drafts_quick_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/drafts/{draft_id}": {
         parameters: {
             query?: never;
@@ -929,6 +963,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Notification Preferences */
+        get: operations["notification_preferences_api_v1_settings_notifications_get"];
+        /** Replace Notification Preferences */
+        put: operations["replace_notification_preferences_api_v1_settings_notifications_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/timezone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Change Timezone */
+        put: operations["change_timezone_api_v1_settings_timezone_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/transactions": {
         parameters: {
             query?: never;
@@ -1191,6 +1260,8 @@ export interface components {
             expires_at: string;
             /** Locale */
             locale: string;
+            /** Settings Version */
+            settings_version: number;
             /** Timezone */
             timezone: string;
         };
@@ -1429,6 +1500,10 @@ export interface components {
              * Format: date-time
              */
             cutoff_at: string;
+            /** Forecast Minor */
+            forecast_minor: string;
+            /** Known Recurring Minor */
+            known_recurring_minor: string;
             /**
              * Measured At
              * Format: date-time
@@ -1440,8 +1515,15 @@ export interface components {
             progress_bps: number;
             /** Remaining Minor */
             remaining_minor: string;
+            /** Safe Daily Minor */
+            safe_daily_minor: string;
             /** Spent Minor */
             spent_minor: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "on_track" | "watch" | "over";
         };
         /** BudgetResponse */
         BudgetResponse: {
@@ -1624,7 +1706,7 @@ export interface components {
              * Pending Kind
              * @enum {string}
              */
-            pending_kind: "wizard" | "quick" | "repeat" | "edit";
+            pending_kind: "wizard" | "quick" | "compose" | "repeat" | "edit";
         };
         /** DraftEditTargetResponse */
         DraftEditTargetResponse: {
@@ -1707,6 +1789,27 @@ export interface components {
             result: components["schemas"]["MutationResultResponse"];
         };
         MutationResultResponse: components["schemas"]["DraftMutationResultResponse"] | components["schemas"]["TransactionMutationResultResponse"];
+        /** NotificationPreferencesResponse */
+        NotificationPreferencesResponse: {
+            /** Budget 100 Enabled */
+            budget_100_enabled: boolean;
+            /** Budget 80 Enabled */
+            budget_80_enabled: boolean;
+            /** Quiet End */
+            quiet_end: string | null;
+            /** Quiet Start */
+            quiet_start: string | null;
+            /** Recurring Ready Enabled */
+            recurring_ready_enabled: boolean;
+            /** Version */
+            version: number;
+            /** Weekly Digest Enabled */
+            weekly_digest_enabled: boolean;
+            /** Weekly Time */
+            weekly_time: string;
+            /** Weekly Weekday */
+            weekly_weekday: number;
+        };
         /** OriginalCurrencyTotalResponse */
         OriginalCurrencyTotalResponse: {
             /** Currency */
@@ -5138,6 +5241,236 @@ export interface operations {
             };
         };
     };
+    compose_draft_api_v1_drafts_compose_post: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
+                "X-CSRF-Token": string;
+                /** @description Opaque owner-wide idempotency key retained for 24 hours. */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    account?: {
+                        /** Id */
+                        id: string;
+                        /**
+                         * Kind
+                         * @constant
+                         */
+                        kind: "existing";
+                        /** Version */
+                        version: number;
+                    } | null;
+                    /** Amount */
+                    amount: string;
+                    category?: {
+                        /** Id */
+                        id: string;
+                        /**
+                         * Kind
+                         * @constant
+                         */
+                        kind: "existing";
+                        /** Version */
+                        version: number;
+                    } | null;
+                    /**
+                     * Description
+                     * @default
+                     */
+                    description?: string;
+                    /** Occurred On */
+                    occurred_on?: string | null;
+                    /**
+                     * Type
+                     * @enum {string}
+                     */
+                    type: "income" | "expense";
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MutationResponse"];
+                };
+            };
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MutationResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unsupported Media Type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    begin_quick_draft_api_v1_drafts_quick_post: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
+                "X-CSRF-Token": string;
+                /** @description Opaque owner-wide idempotency key retained for 24 hours. */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Text */
+                    text: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MutationResponse"];
+                };
+            };
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MutationResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unsupported Media Type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
     get_draft_api_v1_drafts__draft_id__get: {
         parameters: {
             query?: never;
@@ -7528,10 +7861,251 @@ export interface operations {
             };
         };
     };
+    notification_preferences_api_v1_settings_notifications_get: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPreferencesResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    replace_notification_preferences_api_v1_settings_notifications_put: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
+                "X-CSRF-Token": string;
+                /** @description Opaque owner-wide idempotency key retained for 24 hours. */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Budget 100 Enabled */
+                    budget_100_enabled: boolean;
+                    /** Budget 80 Enabled */
+                    budget_80_enabled: boolean;
+                    /** Quiet End */
+                    quiet_end: string | null;
+                    /** Quiet Start */
+                    quiet_start: string | null;
+                    /** Recurring Ready Enabled */
+                    recurring_ready_enabled: boolean;
+                    /** Version */
+                    version: number;
+                    /** Weekly Digest Enabled */
+                    weekly_digest_enabled: boolean;
+                    /** Weekly Time */
+                    weekly_time: string;
+                    /** Weekly Weekday */
+                    weekly_weekday: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unsupported Media Type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    change_timezone_api_v1_settings_timezone_put: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque binding to the exact host-only session cookie for this page context. */
+                "X-Session-Binding": string;
+                /** @description Optional bounded transport metadata supplied by the user agent; the session cookie and double-submit CSRF proof are authoritative. */
+                Origin?: string;
+                "X-CSRF-Token": string;
+                /** @description Opaque owner-wide idempotency key retained for 24 hours. */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Timezone */
+                    timezone: string;
+                    /** Version */
+                    version: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unsupported Media Type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
     transactions_api_v1_transactions_get: {
         parameters: {
             query?: {
                 limit?: number;
+                /** @description Inclusive UTC occurrence boundary. Must be provided together with `end`; the maximum span is 366 days. */
+                start?: string;
+                /** @description Exclusive UTC occurrence boundary. Must be provided together with `start`; the maximum span is 366 days. */
+                end?: string;
+                type?: "expense" | "income";
+                account_id?: string;
+                category_id?: string;
+                currency?: string;
                 cursor?: string;
             };
             header: {

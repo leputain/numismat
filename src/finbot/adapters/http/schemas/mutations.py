@@ -30,6 +30,24 @@ PositiveMinorString = Annotated[
         pattern=r"^[1-9][0-9]{0,18}$",
     ),
 ]
+DecimalAmountString = Annotated[
+    str,
+    Field(
+        strict=True,
+        min_length=1,
+        max_length=20,
+        pattern=r"^(?:0|[1-9][0-9]{0,16})(?:\.[0-9]{1,2})?$",
+    ),
+]
+LocalDateString = Annotated[
+    str,
+    Field(
+        strict=True,
+        min_length=10,
+        max_length=10,
+        pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+    ),
+]
 
 
 class MutationRequestModel(ApiModel):
@@ -40,6 +58,16 @@ class EmptyMutationRequest(MutationRequestModel):
     pass
 
 
+class QuickDraftRequest(MutationRequestModel):
+    text: str = Field(
+        strict=True,
+        min_length=1,
+        max_length=4096,
+        pattern=r"\S",
+        repr=False,
+    )
+
+
 class RevisionMutationRequest(MutationRequestModel):
     revision: PositiveRevision = Field(repr=False)
 
@@ -48,10 +76,24 @@ class VersionMutationRequest(MutationRequestModel):
     version: PositiveRevision = Field(repr=False)
 
 
+class TimezoneSettingsRequest(MutationRequestModel):
+    timezone: str = Field(strict=True, min_length=1, max_length=64, repr=False)
+    version: PositiveRevision = Field(repr=False)
+
+
 class ExistingSelectionRequest(MutationRequestModel):
     kind: Literal["existing"]
     id: CanonicalUuidString = Field(repr=False)
     version: PositiveRevision = Field(repr=False)
+
+
+class ComposeDraftRequest(MutationRequestModel):
+    type: Literal["income", "expense"]
+    amount: DecimalAmountString = Field(repr=False)
+    account: ExistingSelectionRequest | None = Field(default=None, repr=False)
+    category: ExistingSelectionRequest | None = Field(default=None, repr=False)
+    occurred_on: LocalDateString | None = Field(default=None, repr=False)
+    description: str = Field(default="", strict=True, max_length=500, repr=False)
 
 
 class CustomSelectionRequest(MutationRequestModel):
@@ -120,8 +162,11 @@ type DraftPatchRequest = Annotated[
 ]
 
 EMPTY_MUTATION_ADAPTER = TypeAdapter(EmptyMutationRequest)
+QUICK_DRAFT_ADAPTER = TypeAdapter(QuickDraftRequest)
+COMPOSE_DRAFT_ADAPTER = TypeAdapter(ComposeDraftRequest)
 REVISION_MUTATION_ADAPTER = TypeAdapter(RevisionMutationRequest)
 VERSION_MUTATION_ADAPTER = TypeAdapter(VersionMutationRequest)
+TIMEZONE_SETTINGS_ADAPTER = TypeAdapter(TimezoneSettingsRequest)
 DRAFT_PATCH_ADAPTER: TypeAdapter[DraftPatchRequest] = TypeAdapter(DraftPatchRequest)
 
 
@@ -153,7 +198,7 @@ class DraftEditTargetResponse(ApiModel):
 
 
 class DraftConflictResponse(ApiModel):
-    pending_kind: Literal["wizard", "quick", "repeat", "edit"]
+    pending_kind: Literal["wizard", "quick", "compose", "repeat", "edit"]
 
 
 class DraftRuleResponse(ApiModel):

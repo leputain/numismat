@@ -11,6 +11,12 @@ const TOOL_GROUPS = [
     title: "Планирование",
     items: [
       {
+        to: "/settings",
+        icon: "more",
+        title: "Настройки",
+        description: "Часовой пояс и базовая валюта учёта",
+      },
+      {
         to: "/budgets",
         icon: "budget",
         title: "Бюджеты",
@@ -21,6 +27,24 @@ const TOOL_GROUPS = [
         icon: "recurring",
         title: "Регулярные операции",
         description: "Расписания с обязательной проверкой черновика",
+      },
+    ],
+  },
+  {
+    id: "catalogs",
+    title: "Настройка учёта",
+    items: [
+      {
+        to: "/accounts",
+        icon: "transactions",
+        title: "Счета",
+        description: "Основной счёт, валюты и архив",
+      },
+      {
+        to: "/categories",
+        icon: "more",
+        title: "Категории",
+        description: "Категории доходов и расходов",
       },
     ],
   },

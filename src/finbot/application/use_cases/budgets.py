@@ -20,7 +20,9 @@ from finbot.application.errors import (
 )
 from finbot.domain.budgets import (
     budget_period_bounds,
+    calculate_budget_forecast,
     calculate_budget_progress,
+    remaining_budget_days,
     validate_budget_period,
 )
 
@@ -177,15 +179,51 @@ async def _progress_many(
     expected_ids = {window.budget_id for window in windows}
     if set(spent_by_budget) != expected_ids:
         raise RuntimeError("Budget reader returned an incomplete aggregate")
-    return tuple(
-        BudgetProgressSnapshot(
-            budget=budget,
-            progress=calculate_budget_progress(
-                budget.definition.limit_minor,
-                spent_by_budget.get(budget.budget_id, 0),
-            ),
-            measured_at=measured_at,
-            cutoff_at=cutoff,
+    forecast_windows = tuple(
+        BudgetSpendWindow(
+            budget_id=budget.budget_id,
+            currency=budget.definition.currency,
+            category_id=budget.definition.category_id,
+            start=cutoff,
+            end=end,
         )
-        for budget, cutoff in zip(budgets, cutoffs, strict=True)
+        for budget, (_start, end), cutoff in zip(budgets, bounds, cutoffs, strict=True)
+        if cutoff < end
     )
+    recurring_by_budget = (
+        await reader.known_recurring_minor_for_budgets(owner_id, forecast_windows)
+        if forecast_windows
+        else {}
+    )
+    expected_forecast_ids = {window.budget_id for window in forecast_windows}
+    if set(recurring_by_budget) != expected_forecast_ids:
+        raise RuntimeError("Budget reader returned an incomplete recurring aggregate")
+
+    snapshots = []
+    for budget, cutoff in zip(budgets, cutoffs, strict=True):
+        spent_minor = spent_by_budget.get(budget.budget_id, 0)
+        progress = calculate_budget_progress(budget.definition.limit_minor, spent_minor)
+        forecast = calculate_budget_forecast(
+            budget.definition.limit_minor,
+            spent_minor,
+            recurring_by_budget.get(budget.budget_id, 0),
+            remaining_budget_days(
+                budget.definition.starts_on,
+                budget.definition.ends_on,
+                budget.definition.timezone,
+                measured_at,
+            ),
+        )
+        snapshots.append(
+            BudgetProgressSnapshot(
+                budget=budget,
+                progress=progress,
+                known_recurring_minor=forecast.known_recurring_minor,
+                safe_daily_minor=forecast.safe_daily_minor,
+                forecast_minor=forecast.forecast_minor,
+                state=forecast.state,
+                measured_at=measured_at,
+                cutoff_at=cutoff,
+            )
+        )
+    return tuple(snapshots)

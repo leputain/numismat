@@ -49,6 +49,10 @@ class BudgetProgressResponse(ApiModel):
     spent_minor: str = Field(pattern=r"^(?:0|[1-9][0-9]{0,63})$", repr=False)
     remaining_minor: str = Field(pattern=r"^(?:0|[1-9][0-9]{0,18})$", repr=False)
     overspent_minor: str = Field(pattern=r"^(?:0|[1-9][0-9]{0,63})$", repr=False)
+    known_recurring_minor: str = Field(pattern=r"^(?:0|[1-9][0-9]{0,63})$", repr=False)
+    safe_daily_minor: str = Field(pattern=r"^(?:0|[1-9][0-9]{0,63})$", repr=False)
+    forecast_minor: str = Field(pattern=r"^(?:0|[1-9][0-9]{0,63})$", repr=False)
+    state: Literal["on_track", "watch", "over"]
     progress_bps: int = Field(ge=0, le=10_000)
     measured_at: datetime = Field(repr=False)
     cutoff_at: datetime = Field(repr=False)
@@ -118,6 +122,10 @@ def budget_response(value: BudgetProgressSnapshot) -> BudgetResponse:
             spent_minor=str(progress.spent_minor),
             remaining_minor=str(progress.remaining_minor),
             overspent_minor=str(progress.overspent_minor),
+            known_recurring_minor=str(value.known_recurring_minor),
+            safe_daily_minor=str(value.safe_daily_minor),
+            forecast_minor=str(value.forecast_minor),
+            state=value.state.value,
             progress_bps=progress.progress_bps,
             measured_at=value.measured_at,
             cutoff_at=value.cutoff_at,

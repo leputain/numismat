@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from finbot.application.dto import AccountSnapshot, CategorySnapshot
+from finbot.domain.money import MoneyError, validate_minor
 from finbot.domain.transactions import TransactionDraft, TransactionType
 
 _FORBIDDEN_PAYLOAD_KEYS = frozenset(
@@ -37,6 +38,7 @@ class DraftPreparationState(StrEnum):
     REVIEW = "review"
     CATEGORY_REQUIRED = "category_required"
     ACCOUNT_REQUIRED = "account_required"
+    TYPE_REQUIRED = "wizard_type"
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,11 +69,47 @@ class PreparedDraftResult:
     payload: Mapping[str, Any] = field(repr=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "payload", _channel_neutral_payload(self.payload))
+        payload = _channel_neutral_payload(self.payload)
+        if self.state is DraftPreparationState.TYPE_REQUIRED:
+            if (
+                set(payload) != {"flow", "input_mode", "amount_minor"}
+                or payload.get("flow") != "quick"
+                or payload.get("input_mode") != "amount_only"
+            ):
+                raise ValueError("Amount-only prepared draft payload is invalid")
+            try:
+                validate_minor(payload["amount_minor"])
+            except MoneyError:
+                raise ValueError("Amount-only prepared draft payload is invalid") from None
+        object.__setattr__(self, "payload", payload)
+
+
+@dataclass(frozen=True, slots=True)
+class AmountOnlyQuickDraft:
+    """Validated amount captured before transaction type and currency are known."""
+
+    amount_minor: int = field(repr=False)
+
+    def __post_init__(self) -> None:
+        try:
+            validated = validate_minor(self.amount_minor)
+        except MoneyError:
+            raise ValueError("Amount-only quick draft is invalid") from None
+        object.__setattr__(self, "amount_minor", validated)
+
+
+class SignedAmountOnlyQuickDraftError(ValueError):
+    """A safe parser signal for a standalone amount carrying a type-like sign."""
+
+    def __init__(self) -> None:
+        super().__init__("Amount-only quick draft must not contain a sign")
+
+
+type QuickDraftParseResult = TransactionDraft | AmountOnlyQuickDraft
 
 
 class QuickDraftParser(Protocol):
-    def parse(self, text: str, *, timezone: str) -> TransactionDraft: ...
+    def parse(self, text: str, *, timezone: str) -> QuickDraftParseResult: ...
 
 
 class DraftPreparationClock(Protocol):

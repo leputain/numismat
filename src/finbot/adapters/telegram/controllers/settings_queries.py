@@ -475,7 +475,7 @@ def render_timezones_receipt(
 ) -> TelegramSettingsQueryReceipt:
     return TelegramSettingsQueryReceipt(
         text=("<b>Часовой пояс</b>\n\nОт него зависят «сегодня», отчёты и даты операций."),
-        reply_markup=settings_timezones_keyboard(owner.timezone),
+        reply_markup=settings_timezones_keyboard(owner.timezone, owner.settings_version),
         message_id=message_id,
     )
 

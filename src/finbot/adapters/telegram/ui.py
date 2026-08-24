@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from hashlib import blake2s
 from uuid import UUID
 
 from aiogram.types import (
@@ -121,17 +120,26 @@ def _draft_callback(
 
 MAIN_MENU = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="➕ Добавить операцию")],
-        [KeyboardButton(text="📅 Сегодня"), KeyboardButton(text="📊 Месяц")],
-        [KeyboardButton(text="🎯 Бюджеты"), KeyboardButton(text="🔁 Регулярные")],
-        [KeyboardButton(text="💱 Курсы")],
-        [KeyboardButton(text="🧾 Все операции"), KeyboardButton(text="↩️ Отменить")],
-        [KeyboardButton(text="📤 CSV"), KeyboardButton(text="⚙️ Настройки")],
-        [KeyboardButton(text="❓ Помощь")],
+        [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="📅 Сегодня")],
+        [KeyboardButton(text="🧾 Операции"), KeyboardButton(text="••• Ещё")],
     ],
     resize_keyboard=True,
     is_persistent=True,
-    input_field_placeholder="Например: 1450 ресторан",
+    input_field_placeholder="Например: 500",
+)
+
+
+MORE_MENU = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📊 Месяц"), KeyboardButton(text="🎯 Бюджеты")],
+        [KeyboardButton(text="🔁 Регулярные"), KeyboardButton(text="💱 Курсы")],
+        [KeyboardButton(text="📤 CSV"), KeyboardButton(text="⚙️ Настройки")],
+        [KeyboardButton(text="↩️ Отменить"), KeyboardButton(text="❓ Помощь")],
+        [KeyboardButton(text="🏠 Меню")],
+    ],
+    resize_keyboard=True,
+    is_persistent=True,
+    input_field_placeholder="Например: 500",
 )
 
 
@@ -1166,16 +1174,18 @@ TIMEZONES = (
 )
 
 
-def timezone_token(value: str) -> str:
-    return blake2s(value.encode("utf-8"), digest_size=8).hexdigest()
-
-
-def settings_timezones_keyboard(selected: str) -> InlineKeyboardMarkup:
+def settings_timezones_keyboard(selected: str, settings_version: int) -> InlineKeyboardMarkup:
+    if (
+        isinstance(settings_version, bool)
+        or not isinstance(settings_version, int)
+        or not 1 <= settings_version <= 2**31 - 1
+    ):
+        raise ValueError("Settings version is invalid")
     rows = [
         [
             InlineKeyboardButton(
                 text=f"{'✓ ' if timezone == selected else ''}{label}",
-                callback_data=f"s:timezone:{index}:{timezone_token(selected)}",
+                callback_data=f"s:timezone:{index}:{settings_version}",
             )
         ]
         for index, (timezone, label) in enumerate(TIMEZONES)

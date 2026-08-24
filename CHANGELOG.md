@@ -6,6 +6,27 @@
 
 Версия пакета остаётся `0.45.0`; перечисленные изменения ещё не выпущены отдельным релизом.
 
+- Telegram принимает строгий amount-only ввод (`500`, `500,50`, `500.50`, `1 200`) без
+  предварительной кнопки и проводит его через тип, категорию, счёт, дату, комментарий и
+  обязательный review; неоднозначные, signed-only, zero, exponent, currency и word формы fail closed,
+  а legacy `500 кофе`/маркеры/даты остались совместимыми;
+- добавлены review-only HTTP capture routes `/api/v1/drafts/quick` и `/api/v1/drafts/compose`, основной
+  быстрый ввод Mini App, одноэкранная форма, три последние операции и review-first
+  «Повторить»; Telegram keyboard сокращён до добавления, отчёта за сегодня, операций и «Ещё»;
+- active transaction pagination получила owner-scoped фильтры периода, типа, счёта, категории и валюты;
+  signed cursor теперь привязан к fingerprint фильтров, а Mini App перезапускает pagination при их смене;
+- Dashboard пересобран вокруг быстрого ввода, результата месяца, бюджетного сигнала и трёх
+  последних операций; добавлены Mini App разделы счетов, категорий и прогресс/автопереход импорта;
+- миграция `0013_settings_version` и `PUT /api/v1/settings/timezone` добавили optimistic numeric version
+  для owner timezone; Mini App показывает базовую валюту read-only и безопасно повторяет
+  тот же prepared request после outcome-unknown;
+- budget progress рассчитывает integer-only факт, известные регулярные обязательства,
+  commitment-only прогноз и безопасный дневной расход по каждой валюте; UI использует
+  серверные `on_track`, `watch` и `over`, а не клиентскую эвристику;
+- миграция `0014_notifications` добавила tenant-owned opt-in настройки 80/100% бюджета,
+  готовой регулярной операции и недельного дайджеста, quiet hours, keyed-digest dedupe, lease recovery и
+  bounded retry; отдельные hardened scheduler/delivery jobs не сохраняют финансовые значения или тексты
+  в очереди и повторно проверяют allowlist, private chat, preference и owner-owned reference перед Telegram I/O;
 - добавлен закрытый multi-user режим: полный `TELEGRAM_ALLOWED_USER_IDS` ограничен 32 canonical ID, пустое значение
   сохраняет singleton primary owner, а каждый разрешённый private actor получает отдельный финансовый ledger без
   shared household, cross-user transfers, RBAC или self-registration;

@@ -14,7 +14,7 @@ from finbot.adapters.telegram.executor import (
     TelegramMutationSession,
 )
 from finbot.adapters.telegram.presenters import HELP_TEXT
-from finbot.adapters.telegram.ui import MAIN_MENU
+from finbot.adapters.telegram.ui import MAIN_MENU, MORE_MENU
 from finbot.application.dto import DraftRef
 from finbot.application.ports import DraftRepository
 from finbot.application.use_cases.drafts import DraftUseCases
@@ -25,9 +25,12 @@ class MainMenuAction(StrEnum):
     MENU = "menu"
     HELP = "help"
     QUICK_HELP = "quick_help"
+    MORE = "more"
 
 
-_SUSPENDING_ACTIONS = frozenset({MainMenuAction.START, MainMenuAction.MENU, MainMenuAction.HELP})
+_SUSPENDING_ACTIONS = frozenset(
+    {MainMenuAction.START, MainMenuAction.MENU, MainMenuAction.HELP, MainMenuAction.MORE}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +83,8 @@ def render_main_menu(action: MainMenuAction) -> MainMenuMessage:
     if action is MainMenuAction.START:
         return MainMenuMessage(
             f"<b>Numismat {VERSION_LABEL} готов</b> 👋\n\n"
-            "Отправьте <code>1450 ресторан</code> или нажмите «➕ Добавить операцию».\n"
+            "Отправьте только сумму — например, <code>500</code> — или полную запись "
+            "<code>1450 ресторан</code>.\n"
             "Все данные доступны только вам в этом личном чате.",
             reply_markup=MAIN_MENU,
         )
@@ -93,8 +97,16 @@ def render_main_menu(action: MainMenuAction) -> MainMenuMessage:
         return MainMenuMessage(HELP_TEXT, reply_markup=MAIN_MENU)
     if action is MainMenuAction.QUICK_HELP:
         return MainMenuMessage(
-            "<b>Быстрый ввод</b>\n\nНапишите сумму и назначение одним сообщением:\n"
+            "<b>Быстрый ввод</b>\n\nОтправьте сумму без знака — например, "
+            "<code>500</code>. Бот уточнит тип и остальные данные.\n\n"
+            "Можно сразу написать полную запись:\n"
             "<code>1450 ресторан</code>\n<code>+250000 зарплата</code>"
+        )
+    if action is MainMenuAction.MORE:
+        return MainMenuMessage(
+            "<b>Ещё</b>\nЗдесь отчёты, бюджеты и настройки. Для операции можно просто "
+            "отправить сумму сообщением.",
+            reply_markup=MORE_MENU,
         )
     raise ValueError("Unsupported main-menu action")
 

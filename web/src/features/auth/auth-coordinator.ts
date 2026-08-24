@@ -106,6 +106,36 @@ export class AuthCoordinator {
     }
   }
 
+  public async refreshAuthenticatedSession(): Promise<AuthState> {
+    if (this.#state.status !== "authenticated") {
+      return this.#state;
+    }
+    const generation = this.#authGeneration;
+    try {
+      const session = await this.#api.getSession({ retry: false });
+      this.#authenticate(session, generation);
+    } catch (error) {
+      if (!this.#isCurrentAuthGeneration(generation)) {
+        return this.#state;
+      }
+      if (
+        error instanceof NetworkError ||
+        (error instanceof HttpApiError && error.status >= 500)
+      ) {
+        return this.#state;
+      }
+      if (
+        error instanceof ReopenRequiredError ||
+        (error instanceof HttpApiError && error.status === 401)
+      ) {
+        this.#terminal("reopen_required", generation);
+      } else {
+        this.#fatal("protocol_error", generation);
+      }
+    }
+    return this.#state;
+  }
+
   public suspendProtectedSession(): void {
     const canPreserveSessionBinding = this.#state.status === "authenticated";
     this.#invalidateAuthGeneration();

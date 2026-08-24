@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
+from enum import StrEnum
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -8,6 +9,12 @@ from finbot.domain.money import validate_minor
 MAX_BUDGET_NAME_LENGTH = 60
 MAX_BUDGET_PERIOD_DAYS = 366
 BUDGET_PROGRESS_BPS_SCALE = 10_000
+
+
+class BudgetForecastState(StrEnum):
+    ON_TRACK = "on_track"
+    WATCH = "watch"
+    OVER = "over"
 
 
 def normalize_budget_name(value: str) -> str:
@@ -110,6 +117,27 @@ class BudgetProgress:
             raise ValueError("Бюджет не может одновременно иметь остаток и перерасход")
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class BudgetForecast:
+    """Commitment-only forecast; discretionary spending is not extrapolated."""
+
+    known_recurring_minor: int = field(repr=False)
+    safe_daily_minor: int = field(repr=False)
+    forecast_minor: int = field(repr=False)
+    state: BudgetForecastState
+
+    def __post_init__(self) -> None:
+        for value in (
+            self.known_recurring_minor,
+            self.safe_daily_minor,
+            self.forecast_minor,
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("Значение прогноза бюджета должно быть неотрицательным")
+        if not isinstance(self.state, BudgetForecastState):
+            raise ValueError("Состояние прогноза бюджета не поддерживается")
+
+
 def calculate_budget_progress(limit_minor: int, spent_minor: int) -> BudgetProgress:
     validate_minor(limit_minor)
     if isinstance(spent_minor, bool) or not isinstance(spent_minor, int) or spent_minor < 0:
@@ -126,3 +154,66 @@ def calculate_budget_progress(limit_minor: int, spent_minor: int) -> BudgetProgr
         overspent_minor=overspent,
         progress_bps=progress_bps,
     )
+
+
+def calculate_budget_forecast(
+    limit_minor: int,
+    spent_minor: int,
+    known_recurring_minor: int,
+    remaining_days: int,
+) -> BudgetForecast:
+    """Forecast only committed recurring expenses and floor the safe daily amount.
+
+    ``over`` is reserved for an actual overspend. ``watch`` starts when actual
+    spend plus known recurring commitments reaches 80% of the limit. The
+    threshold uses integer cross-multiplication, so no money value crosses a
+    floating-point boundary.
+    """
+
+    validate_minor(limit_minor)
+    for value in (spent_minor, known_recurring_minor, remaining_days):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("Параметр прогноза бюджета должен быть неотрицательным")
+    forecast_minor = spent_minor + known_recurring_minor
+    if spent_minor > limit_minor:
+        state = BudgetForecastState.OVER
+    elif forecast_minor * 100 >= limit_minor * 80:
+        state = BudgetForecastState.WATCH
+    else:
+        state = BudgetForecastState.ON_TRACK
+    available_minor = max(limit_minor - forecast_minor, 0)
+    return BudgetForecast(
+        known_recurring_minor=known_recurring_minor,
+        safe_daily_minor=available_minor // remaining_days if remaining_days else 0,
+        forecast_minor=forecast_minor,
+        state=state,
+    )
+
+
+def remaining_budget_days(
+    starts_on: date,
+    ends_on: date,
+    timezone: str,
+    measured_at: datetime,
+) -> int:
+    """Return owner-local calendar days left, including the current day."""
+
+    budget_period_bounds(starts_on, ends_on, timezone)
+    if not isinstance(measured_at, datetime) or measured_at.utcoffset() is None:
+        raise ValueError("Время прогноза бюджета должно содержать часовой пояс")
+    zone = _timezone_for_budget(timezone)
+    local_day = measured_at.astimezone(zone).date()
+    if local_day < starts_on:
+        return (ends_on - starts_on).days + 1
+    if local_day > ends_on:
+        return 0
+    return (ends_on - local_day).days + 1
+
+
+def _timezone_for_budget(value: str) -> ZoneInfo:
+    if not isinstance(value, str) or not value or len(value) > 64:
+        raise ValueError("Часовой пояс бюджета не прошёл проверку")
+    try:
+        return ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError("Часовой пояс бюджета не поддерживается") from exc

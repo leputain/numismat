@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -25,6 +26,7 @@ from finbot.adapters.database.models import (
     CategoryRule,
     Draft,
     HttpIdempotencyRecord,
+    NotificationPreference,
     Transaction,
     User,
     WebSession,
@@ -74,6 +76,7 @@ NOW = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
 @dataclass(frozen=True, slots=True)
 class _Fixture:
     owner_id: UUID = field(repr=False)
+    owner_telegram_user_id: int = field(repr=False)
     account_id: UUID = field(repr=False)
     category_id: UUID = field(repr=False)
     transaction_id: UUID | None = field(default=None, repr=False)
@@ -182,6 +185,7 @@ async def _setup_owner(
 
         return _Fixture(
             owner_id=owner.id,
+            owner_telegram_user_id=telegram_user_id,
             account_id=account.id,
             category_id=category.id,
             transaction_id=transaction_id,
@@ -522,6 +526,198 @@ async def test_post_mutation_failure_rolls_back_claim_and_retry_is_new() -> None
 
 
 @pytest.mark.asyncio
+async def test_timezone_endpoint_is_versioned_idempotent_and_stale_rolls_back_claim() -> None:
+    engine = create_async_engine(DATABASE_URL)
+    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+    )
+    fixture = await _setup_owner(factory)
+    digester = HttpSecurityDigester(SECURITY_KEY)
+    tokens = await _create_auth_session(factory, fixture.owner_id, digester)
+    app = _app(factory, digester)
+    success_key = _opaque_token()
+
+    try:
+        async with _client(app) as client:
+            success = await client.put(
+                "/api/v1/settings/timezone",
+                headers=_mutation_headers(tokens, success_key),
+                json={"timezone": "Asia/Yekaterinburg", "version": 1},
+            )
+            replay = await client.put(
+                "/api/v1/settings/timezone",
+                headers=_mutation_headers(tokens, success_key),
+                json={"timezone": "Asia/Yekaterinburg", "version": 1},
+            )
+            stale = await client.put(
+                "/api/v1/settings/timezone",
+                headers=_mutation_headers(tokens, _opaque_token()),
+                json={"timezone": "Europe/Samara", "version": 1},
+            )
+            invalid = await client.put(
+                "/api/v1/settings/timezone",
+                headers=_mutation_headers(tokens, _opaque_token()),
+                json={"timezone": "Not/AZone", "version": 2},
+            )
+
+        assert success.status_code == replay.status_code == 204
+        assert not success.content and not replay.content
+        assert stale.status_code == 409
+        assert stale.json() == {
+            "error": {
+                "code": "object_version_conflict",
+                "details": {"current_version": 2},
+                "message": "Объект был изменён",
+            }
+        }
+        assert invalid.status_code == 422
+        assert invalid.json()["error"]["code"] == "validation_failed"
+
+        async with factory() as verification:
+            owner = await verification.get(User, fixture.owner_id)
+            assert owner is not None
+            assert (owner.timezone, owner.settings_version) == ("Asia/Yekaterinburg", 2)
+            records = (
+                await verification.scalars(
+                    select(HttpIdempotencyRecord).where(
+                        HttpIdempotencyRecord.user_id == fixture.owner_id,
+                        HttpIdempotencyRecord.operation == "settings.timezone",
+                    )
+                )
+            ).all()
+            assert len(records) == 1
+            assert records[0].status == "completed"
+            assert records[0].result_kind == IdempotencyResultKind.NONE.value
+    finally:
+        await _cleanup(engine, fixture)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_notification_preferences_endpoint_defaults_and_versioned_replace() -> None:
+    engine = create_async_engine(DATABASE_URL)
+    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+    )
+    fixture = await _setup_owner(factory)
+    other_fixture = await _setup_owner(factory)
+    digester = HttpSecurityDigester(SECURITY_KEY)
+    tokens = await _create_auth_session(factory, fixture.owner_id, digester)
+    other_tokens = await _create_auth_session(factory, other_fixture.owner_id, digester)
+    app = _app(factory, digester)
+    success_key = _opaque_token()
+    body = {
+        "budget_80_enabled": True,
+        "budget_100_enabled": True,
+        "recurring_ready_enabled": False,
+        "weekly_digest_enabled": True,
+        "quiet_start": "22:00",
+        "quiet_end": "07:00",
+        "weekly_weekday": 4,
+        "weekly_time": "18:30",
+        "version": 0,
+    }
+
+    try:
+        async with _client(app) as client:
+            initial = await client.get(
+                "/api/v1/settings/notifications",
+                headers=_read_headers(tokens),
+            )
+            success = await client.put(
+                "/api/v1/settings/notifications",
+                headers=_mutation_headers(tokens, success_key),
+                json=body,
+            )
+            replay = await client.put(
+                "/api/v1/settings/notifications",
+                headers=_mutation_headers(tokens, success_key),
+                json=body,
+            )
+            current = await client.get(
+                "/api/v1/settings/notifications",
+                headers=_read_headers(tokens),
+            )
+            other_owner = await client.get(
+                "/api/v1/settings/notifications",
+                headers=_read_headers(other_tokens),
+            )
+            stale = await client.put(
+                "/api/v1/settings/notifications",
+                headers=_mutation_headers(tokens, _opaque_token()),
+                json={**body, "budget_80_enabled": False},
+            )
+            invalid = await client.put(
+                "/api/v1/settings/notifications",
+                headers=_mutation_headers(tokens, _opaque_token()),
+                json={**body, "version": 1, "quiet_end": "22:00"},
+            )
+            exhausted = await client.put(
+                "/api/v1/settings/notifications",
+                headers=_mutation_headers(tokens, _opaque_token()),
+                json={**body, "version": 2**31 - 1},
+            )
+
+        assert initial.status_code == 200
+        assert initial.json() == {
+            "budget_80_enabled": False,
+            "budget_100_enabled": False,
+            "recurring_ready_enabled": False,
+            "weekly_digest_enabled": False,
+            "quiet_start": None,
+            "quiet_end": None,
+            "weekly_weekday": 0,
+            "weekly_time": "09:00",
+            "version": 0,
+        }
+        assert success.status_code == replay.status_code == 204
+        assert not success.content and not replay.content
+        assert current.status_code == 200
+        assert current.json() == {**body, "version": 1}
+        assert other_owner.status_code == 200
+        assert other_owner.json() == initial.json()
+        assert stale.status_code == 409
+        assert stale.json() == {
+            "error": {
+                "code": "object_version_conflict",
+                "details": {"current_version": 1},
+                "message": "Объект был изменён",
+            }
+        }
+        assert invalid.status_code == 422
+        assert invalid.json()["error"]["code"] == "validation_failed"
+        assert exhausted.status_code == 422
+        assert exhausted.json()["error"]["code"] == "validation_failed"
+
+        async with factory() as verification:
+            preferences = await verification.get(NotificationPreference, fixture.owner_id)
+            assert preferences is not None
+            assert await verification.get(NotificationPreference, other_fixture.owner_id) is None
+            assert preferences.version == 1
+            assert preferences.budget_80_enabled
+            assert preferences.budget_100_enabled
+            assert not preferences.recurring_ready_enabled
+            assert preferences.weekly_digest_enabled
+            records = (
+                await verification.scalars(
+                    select(HttpIdempotencyRecord).where(
+                        HttpIdempotencyRecord.user_id == fixture.owner_id,
+                        HttpIdempotencyRecord.operation == "notification_preferences.replace",
+                    )
+                )
+            ).all()
+            assert len(records) == 1
+            assert records[0].status == "completed"
+            assert records[0].result_kind == IdempotencyResultKind.NONE.value
+    finally:
+        await _cleanup(engine, fixture)
+        await _cleanup(engine, other_fixture)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_logout_waits_for_task14_mutation_transaction_then_revokes_session() -> None:
     engine = create_async_engine(DATABASE_URL)
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
@@ -556,7 +752,7 @@ async def test_logout_waits_for_task14_mutation_transaction_then_revokes_session
         logout_started.set()
         await TelegramAuthService(
             bot_token="123456:synthetic-token",
-            owner_telegram_user_id=_synthetic_telegram_user_id(),
+            allowed_telegram_user_ids=frozenset((fixture.owner_telegram_user_id,)),
             digester=digester,
             uow_factory=SqlAlchemyAuthUnitOfWorkFactory(factory),
             clock=lambda: NOW,
@@ -910,6 +1106,352 @@ async def test_http_same_key_replays_semantically_identical_patch_json() -> None
             )
     finally:
         await _cleanup(engine, fixture)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_http_quick_draft_replay_uses_only_keyed_fingerprint() -> None:
+    engine = create_async_engine(DATABASE_URL)
+    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+    )
+    fixture = await _setup_owner(factory)
+    digester = HttpSecurityDigester(SECURITY_KEY)
+    tokens = await _create_auth_session(factory, fixture.owner_id, digester)
+    app = _app(factory, digester)
+    idempotency_key = _opaque_token()
+    headers = {
+        **_mutation_headers(tokens, idempotency_key),
+        "Content-Type": "application/json",
+    }
+    quick_text = "500"
+    compact = json.dumps({"text": quick_text}, ensure_ascii=False, separators=(",", ":"))
+    reordered = json.dumps({"text": quick_text}, ensure_ascii=False, indent=2)
+
+    try:
+        async with _client(app) as client:
+            first = await client.post(
+                "/api/v1/drafts/quick",
+                headers=headers,
+                content=compact.encode("utf-8"),
+            )
+            replay = await client.post(
+                "/api/v1/drafts/quick",
+                headers=headers,
+                content=reordered.encode("utf-8"),
+            )
+            mismatch = await client.post(
+                "/api/v1/drafts/quick",
+                headers=headers,
+                json={"text": "600"},
+            )
+
+        assert (first.status_code, replay.status_code) == (201, 201)
+        assert first.json() == replay.json()
+        assert first.json()["result"]["kind"] == "draft"
+        assert mismatch.status_code == 409
+        assert mismatch.json()["error"]["code"] == "idempotency_key_conflict"
+
+        canonical_request = json.dumps(
+            {
+                "body": {"text": quick_text},
+                "operation": "draft.quick",
+                "version": 1,
+            },
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("ascii")
+        async with factory() as verification:
+            draft = await verification.scalar(
+                select(Draft).where(Draft.user_id == fixture.owner_id)
+            )
+            record = await verification.scalar(
+                select(HttpIdempotencyRecord).where(
+                    HttpIdempotencyRecord.user_id == fixture.owner_id,
+                    HttpIdempotencyRecord.operation == "draft.quick",
+                )
+            )
+            assert draft is not None
+            assert draft.state == "wizard_type"
+            assert draft.payload == {
+                "flow": "quick",
+                "input_mode": "amount_only",
+                "amount_minor": 50_000,
+            }
+            assert record is not None
+            assert len(record.idempotency_key_hash) == 32
+            assert len(record.request_fingerprint) == 32
+            assert record.idempotency_key_hash != idempotency_key.encode("ascii")
+            assert (
+                record.request_fingerprint
+                == digester.request_fingerprint(canonical_request).database_value()
+            )
+    finally:
+        await _cleanup(engine, fixture)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_http_compose_creates_only_review_draft_and_replays_normalized_decimal() -> None:
+    engine = create_async_engine(DATABASE_URL)
+    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+    )
+    fixture = await _setup_owner(factory)
+    digester = HttpSecurityDigester(SECURITY_KEY)
+    tokens = await _create_auth_session(factory, fixture.owner_id, digester)
+    app = _app(factory, digester)
+    idempotency_key = _opaque_token()
+    headers = _mutation_headers(tokens, idempotency_key)
+
+    try:
+        async with _client(app) as client:
+            first = await client.post(
+                "/api/v1/drafts/compose",
+                headers=headers,
+                json={
+                    "type": "expense",
+                    "amount": "500.50",
+                    "category": {
+                        "kind": "existing",
+                        "id": str(fixture.category_id),
+                        "version": 1,
+                    },
+                    "occurred_on": "2026-08-20",
+                },
+            )
+            replay = await client.post(
+                "/api/v1/drafts/compose",
+                headers=headers,
+                json={
+                    "amount": "500.5",
+                    "category": {
+                        "id": str(fixture.category_id),
+                        "kind": "existing",
+                        "version": 1,
+                    },
+                    "occurred_on": "2026-08-20",
+                    "type": "expense",
+                },
+            )
+
+        assert (first.status_code, replay.status_code) == (201, 201)
+        assert first.json() == replay.json()
+        assert first.json()["result"]["kind"] == "draft"
+
+        canonical_request = json.dumps(
+            {
+                "body": {
+                    "amount_minor": "50050",
+                    "category": {"id": str(fixture.category_id), "version": 1},
+                    "description": "",
+                    "occurred_on": "2026-08-20",
+                    "type": "expense",
+                },
+                "operation": "draft.compose",
+                "version": 1,
+            },
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("ascii")
+        async with factory() as verification:
+            draft = await verification.scalar(
+                select(Draft).where(Draft.user_id == fixture.owner_id)
+            )
+            record = await verification.scalar(
+                select(HttpIdempotencyRecord).where(
+                    HttpIdempotencyRecord.user_id == fixture.owner_id,
+                    HttpIdempotencyRecord.operation == "draft.compose",
+                )
+            )
+            assert draft is not None
+            assert draft.state == "review"
+            assert draft.payload["flow"] == "quick"
+            assert draft.payload["amount_minor"] == 50_050
+            assert draft.payload["account_id"] == str(fixture.account_id)
+            assert draft.payload["category_id"] == str(fixture.category_id)
+            assert datetime.fromisoformat(draft.payload["occurred_at"]).date().isoformat() == (
+                "2026-08-20"
+            )
+            assert (
+                await verification.scalar(
+                    select(func.count(Transaction.id)).where(
+                        Transaction.user_id == fixture.owner_id
+                    )
+                )
+                == 0
+            )
+            assert record is not None
+            assert len(record.idempotency_key_hash) == 32
+            assert len(record.request_fingerprint) == 32
+            assert record.idempotency_key_hash != idempotency_key.encode("ascii")
+            assert (
+                record.request_fingerprint
+                == digester.request_fingerprint(canonical_request).database_value()
+            )
+    finally:
+        await _cleanup(engine, fixture)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_http_compose_conflict_persists_typed_intent_and_replace_revalidates() -> None:
+    engine = create_async_engine(DATABASE_URL)
+    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+    )
+    fixture = await _setup_owner(factory)
+    digester = HttpSecurityDigester(SECURITY_KEY)
+    tokens = await _create_auth_session(factory, fixture.owner_id, digester)
+    app = _app(factory, digester)
+    async with factory.begin() as session:
+        active = Draft(
+            user_id=fixture.owner_id,
+            state="wizard_amount",
+            payload={"flow": "wizard", "type": "expense"},
+        )
+        session.add(active)
+        await session.flush()
+        active_id = active.id
+
+    try:
+        async with _client(app) as client:
+            conflict = await client.post(
+                "/api/v1/drafts/compose",
+                headers=_mutation_headers(tokens, _opaque_token()),
+                json={
+                    "type": "expense",
+                    "amount": "700.25",
+                    "account": {
+                        "kind": "existing",
+                        "id": str(fixture.account_id),
+                        "version": 1,
+                    },
+                    "category": {
+                        "kind": "existing",
+                        "id": str(fixture.category_id),
+                        "version": 1,
+                    },
+                    "description": "synthetic",
+                },
+            )
+
+            assert conflict.status_code == 200
+            assert conflict.json()["result"]["draft_id"] == str(active_id)
+            conflict_revision = conflict.json()["result"]["revision"]
+
+            async with factory() as staged_verification:
+                staged = await staged_verification.get(Draft, active_id)
+                assert staged is not None
+                pending = staged.payload["pending_intent"]
+                assert pending["kind"] == "compose"
+                assert pending["amount_minor"] == 70_025
+                assert "amount" not in pending
+                assert "body" not in pending
+                assert pending["account_version"] == 1
+                assert pending["category_version"] == 1
+
+            replaced = await client.post(
+                f"/api/v1/drafts/{active_id}/replace",
+                headers=_mutation_headers(tokens, _opaque_token()),
+                json={"revision": conflict_revision},
+            )
+
+        assert replaced.status_code == 200
+        assert replaced.json()["result"]["draft_id"] != str(active_id)
+        async with factory() as verification:
+            drafts = tuple(
+                await verification.scalars(select(Draft).where(Draft.user_id == fixture.owner_id))
+            )
+            assert len(drafts) == 1
+            replacement = drafts[0]
+            assert replacement.state == "review"
+            assert replacement.payload["amount_minor"] == 70_025
+            assert replacement.payload["account_id"] == str(fixture.account_id)
+            assert replacement.payload["category_id"] == str(fixture.category_id)
+            assert "pending_intent" not in replacement.payload
+            assert (
+                await verification.scalar(
+                    select(func.count(Transaction.id)).where(
+                        Transaction.user_id == fixture.owner_id
+                    )
+                )
+                == 0
+            )
+    finally:
+        await _cleanup(engine, fixture)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_http_compose_rejects_cross_owner_catalog_reference_atomically() -> None:
+    engine = create_async_engine(DATABASE_URL)
+    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+    )
+    fixture = await _setup_owner(factory)
+    foreign = await _setup_owner(factory)
+    digester = HttpSecurityDigester(SECURITY_KEY)
+    tokens = await _create_auth_session(factory, fixture.owner_id, digester)
+    app = _app(factory, digester)
+
+    try:
+        async with _client(app) as client:
+            response = await client.post(
+                "/api/v1/drafts/compose",
+                headers=_mutation_headers(tokens, _opaque_token()),
+                json={
+                    "type": "expense",
+                    "amount": "500",
+                    "account": {
+                        "kind": "existing",
+                        "id": str(foreign.account_id),
+                        "version": 1,
+                    },
+                    "category": {
+                        "kind": "existing",
+                        "id": str(fixture.category_id),
+                        "version": 1,
+                    },
+                },
+            )
+
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "catalog_unavailable"
+        async with factory() as verification:
+            assert (
+                await verification.scalar(
+                    select(func.count(Draft.id)).where(Draft.user_id == fixture.owner_id)
+                )
+                == 0
+            )
+            assert (
+                await verification.scalar(
+                    select(func.count(Transaction.id)).where(
+                        Transaction.user_id == fixture.owner_id
+                    )
+                )
+                == 0
+            )
+            assert (
+                await verification.scalar(
+                    select(func.count(HttpIdempotencyRecord.id)).where(
+                        HttpIdempotencyRecord.user_id == fixture.owner_id
+                    )
+                )
+                == 0
+            )
+    finally:
+        await _cleanup(engine, fixture)
+        await _cleanup(engine, foreign)
         await engine.dispose()
 
 

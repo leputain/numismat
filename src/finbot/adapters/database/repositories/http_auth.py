@@ -41,6 +41,7 @@ def _owner(user: User) -> AuthOwner:
         timezone=user.timezone,
         base_currency=user.base_currency,
         telegram_user_id=user.telegram_user_id,
+        settings_version=user.settings_version,
     )
 
 

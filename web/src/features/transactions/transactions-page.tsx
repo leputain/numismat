@@ -1,36 +1,51 @@
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
-import { Link } from "react-router";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useLocation } from "react-router";
 
 import { apiClient } from "../../app/providers";
 import type { TransactionPageResponse } from "../../shared/api/types";
+import { useSessionFormat } from "../../shared/auth/use-session-format";
 import { EmptyState, ErrorState, PageSkeleton } from "../../shared/components/async-state";
 import { PageHeading } from "../../shared/components/page-heading";
 import { emitClientEvent } from "../../shared/logging/client-events";
 import { restartTransactionPagination } from "../../shared/mutations/query-recovery";
 import { queryKeys } from "../../shared/queries/query-keys";
 import { TransactionCard } from "./transaction-card";
+import { TransactionFilterPanel } from "./transaction-filter-panel";
+import {
+  activeTransactionFilterCount,
+  buildTransactionQueryFilters,
+  createTransactionFilterState,
+  transactionPagePath,
+} from "./transaction-filter-model";
+import type {
+  TransactionFeedMode,
+  TransactionFilterState,
+  TransactionQueryFilters,
+} from "./transaction-filter-model";
 
 const PAGE_LIMIT = 30;
-type FeedMode = "active" | "trash";
 
-function transactionPagePath(mode: FeedMode, cursor: string | null): string {
-  const params = new URLSearchParams({ limit: String(PAGE_LIMIT) });
-  if (cursor !== null) {
-    params.set("cursor", cursor);
-  }
-  const collection = mode === "active" ? "transactions" : "transactions/trash";
-  return `/api/v1/${collection}?${params.toString()}`;
-}
-
-function TransactionFeed({ mode }: { readonly mode: FeedMode }) {
+function TransactionFeed({
+  mode,
+  filters,
+}: {
+  readonly mode: TransactionFeedMode;
+  readonly filters: TransactionQueryFilters;
+}) {
   const queryClient = useQueryClient();
-  const queryKey = mode === "active" ? queryKeys.transactions.active(PAGE_LIMIT) : queryKeys.transactions.trash(PAGE_LIMIT);
+  const queryKey =
+    mode === "active"
+      ? queryKeys.transactions.active(PAGE_LIMIT, filters)
+      : queryKeys.transactions.trash(PAGE_LIMIT);
   const feed = useInfiniteQuery({
     queryKey,
     initialPageParam: null as string | null,
     queryFn: ({ pageParam, signal }) =>
-      apiClient.get<TransactionPageResponse>(transactionPagePath(mode, pageParam), { signal }),
+      apiClient.get<TransactionPageResponse>(
+        transactionPagePath(mode, pageParam, filters, PAGE_LIMIT),
+        { signal },
+      ),
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     staleTime: 30_000,
   });
@@ -52,10 +67,16 @@ function TransactionFeed({ mode }: { readonly mode: FeedMode }) {
   const transactions = feed.data.pages.flatMap((page) => page.items);
   if (transactions.length === 0) {
     return mode === "active" ? (
-      <EmptyState title="Операций пока нет">
-        <p>Перед сохранением вы сможете проверить сумму, категорию и счёт.</p>
-        <Link className="button button--primary mt-5" to="/draft">Создать черновик</Link>
-      </EmptyState>
+      activeTransactionFilterCount(filters) > 0 ? (
+        <EmptyState title="По фильтрам ничего нет">
+          <p>Измените период или снимите часть условий — исходная история останется на месте.</p>
+        </EmptyState>
+      ) : (
+        <EmptyState title="Операций пока нет">
+          <p>Перед сохранением вы сможете проверить сумму, категорию и счёт.</p>
+          <Link className="button button--primary mt-5" to="/draft">Создать черновик</Link>
+        </EmptyState>
+      )
     ) : (
       <EmptyState title="Корзина пуста">Удалённые операции появятся здесь и останутся доступными для восстановления.</EmptyState>
     );
@@ -92,15 +113,34 @@ function TransactionFeed({ mode }: { readonly mode: FeedMode }) {
 }
 
 export function TransactionsPage() {
-  const [mode, setMode] = useState<FeedMode>("active");
+  const queryClient = useQueryClient();
+  const location = useLocation();
+  const { baseCurrency, timeZone } = useSessionFormat();
+  const [mode, setMode] = useState<TransactionFeedMode>("active");
+  const [periodAnchor] = useState(() => new Date());
+  const [filterState, setFilterState] = useState<TransactionFilterState>(() =>
+    createTransactionFilterState(timeZone, periodAnchor, location.search),
+  );
+  const filters = useMemo(
+    () => buildTransactionQueryFilters(filterState, timeZone, periodAnchor),
+    [filterState, periodAnchor, timeZone],
+  );
 
   useEffect(() => emitClientEvent("transactions_opened"), []);
+
+  const replaceFilters = (nextState: TransactionFilterState) => {
+    if (nextState !== filterState) {
+      void queryClient.cancelQueries({ queryKey: queryKeys.transactions.activeRoot });
+      queryClient.removeQueries({ queryKey: queryKeys.transactions.activeRoot });
+      setFilterState(nextState);
+    }
+  };
 
   return (
     <div className="page-stack transactions-page">
       <PageHeading
         action={<Link className="button button--primary" to="/draft">Новая запись</Link>}
-        description="Свежие операции и удалённые записи. После изменений список обновляется автоматически."
+        description="Найдите нужные операции по периоду, типу, счёту, категории или валюте."
         eyebrow="История"
         title="Операции"
       />
@@ -131,10 +171,22 @@ export function TransactionsPage() {
       <section
         aria-labelledby={mode === "active" ? "transactions-active-tab" : "transactions-trash-tab"}
         aria-live="polite"
+        className="transaction-feed-stack"
         id="transaction-feed"
         role="tabpanel"
       >
-        <TransactionFeed key={mode} mode={mode} />
+        {mode === "active" ? (
+          <TransactionFilterPanel
+            baseCurrency={baseCurrency}
+            filters={filters}
+            onChange={replaceFilters}
+            onReset={() => {
+              replaceFilters(createTransactionFilterState(timeZone, periodAnchor));
+            }}
+            state={filterState}
+          />
+        ) : null}
+        <TransactionFeed filters={filters} key={mode} mode={mode} />
       </section>
     </div>
   );

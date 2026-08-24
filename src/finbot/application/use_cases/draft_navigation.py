@@ -128,6 +128,14 @@ def _canonicalize_amount(payload: dict[str, object]) -> None:
     payload.pop("amount", None)
 
 
+def _is_amount_only_quick(payload: Mapping[str, Any]) -> bool:
+    if payload.get("flow") != "quick" or payload.get("input_mode") != "amount_only":
+        return False
+    if "amount_minor" not in payload:
+        raise InvalidStateError("Черновик с быстрым вводом не содержит сумму")
+    return True
+
+
 def _attach_category(payload: dict[str, object], category: CategorySnapshot) -> None:
     payload.update(
         {
@@ -294,6 +302,15 @@ class DraftNavigationUseCases:
         _clear_rule_learning(payload)
         if current.state == "wizard_type":
             _drop_category(payload)
+            if _is_amount_only_quick(payload):
+                return await self._updated(
+                    command,
+                    owner,
+                    current,
+                    "wizard_category",
+                    payload,
+                    await self._category_choices(command, payload),
+                )
             return await self._updated(command, owner, current, "wizard_amount", payload)
 
         return_state = _required_return_state(payload, "review_return_state")
@@ -530,6 +547,10 @@ class DraftNavigationUseCases:
             payload.pop("type", None)
             return "wizard_type", DraftNavigationChoices()
         if state == "wizard_category":
+            if _is_amount_only_quick(payload):
+                payload.pop("type", None)
+                _drop_category(payload)
+                return "wizard_type", DraftNavigationChoices()
             payload.pop("amount", None)
             payload.pop("amount_minor", None)
             return "wizard_amount", DraftNavigationChoices()

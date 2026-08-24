@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qsl
 from uuid import UUID
@@ -13,7 +14,8 @@ from finbot.adapters.http.auth.cookies import (
     parse_cookie_headers,
 )
 from finbot.adapters.http.errors import HttpApiError, HttpErrorCode
-from finbot.application.dto import TimeSeriesGrain
+from finbot.application.dto import TimeSeriesGrain, TransactionListFilters
+from finbot.domain.transactions import TransactionType
 
 MAX_QUERY_BYTES = 2048
 MAX_QUERY_FIELDS = 8
@@ -33,6 +35,7 @@ CANONICAL_UUID_PATTERN = (
 )
 _CANONICAL_UUID = re.compile(CANONICAL_UUID_PATTERN)
 _CURSOR = re.compile(r"[A-Za-z0-9_-]{76}\Z")
+_CURRENCY = re.compile(r"[A-Z]{3}\Z")
 
 
 def _invalid_query() -> HttpApiError:
@@ -163,3 +166,33 @@ def canonical_cursor(value: str | None) -> str | None:
     if _CURSOR.fullmatch(value) is None:
         raise HttpApiError(status_code=422, code=HttpErrorCode.INVALID_CURSOR)
     return value
+
+
+def transaction_list_filters(query: Mapping[str, str]) -> TransactionListFilters:
+    raw_start = query.get("start")
+    raw_end = query.get("end")
+    if (raw_start is None) != (raw_end is None):
+        raise _invalid_query()
+    start = utc_timestamp(raw_start) if raw_start is not None else None
+    end = utc_timestamp(raw_end) if raw_end is not None else None
+    if start is not None and end is not None:
+        validate_period(start, end)
+
+    raw_kind = query.get("type")
+    try:
+        kind = TransactionType(raw_kind) if raw_kind is not None else None
+    except ValueError as exc:
+        raise _invalid_query() from exc
+
+    raw_currency = query.get("currency")
+    if raw_currency is not None and _CURRENCY.fullmatch(raw_currency) is None:
+        raise _invalid_query()
+
+    return TransactionListFilters(
+        start=start,
+        end=end,
+        kind=kind,
+        account_id=(canonical_uuid(query["account_id"]) if "account_id" in query else None),
+        category_id=(canonical_uuid(query["category_id"]) if "category_id" in query else None),
+        currency=raw_currency,
+    )

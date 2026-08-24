@@ -26,6 +26,15 @@ class AuthOwner:
     timezone: str
     base_currency: str
     telegram_user_id: int = field(default=0, repr=False)
+    settings_version: int = field(default=1, repr=False)
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.settings_version, bool)
+            or not isinstance(self.settings_version, int)
+            or not 1 <= self.settings_version <= 2**31 - 1
+        ):
+            raise ValueError("Auth owner settings version must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True, repr=False)

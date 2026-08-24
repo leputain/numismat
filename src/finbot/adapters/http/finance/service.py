@@ -11,11 +11,13 @@ from finbot.adapters.http.auth.service import SessionAuthenticator, SessionCrede
 from finbot.adapters.http.finance.cursor import TransactionCursorCodec
 from finbot.adapters.http.finance.ports import FinanceQueryUnitOfWorkFactory
 from finbot.application.dto import (
+    EMPTY_TRANSACTION_LIST_FILTERS,
     DashboardSnapshot,
     PeriodComparisonSnapshot,
     PeriodReportSnapshot,
     TimeSeriesGrain,
     TimeSeriesSnapshot,
+    TransactionListFilters,
     TransactionSnapshot,
 )
 from finbot.application.use_cases.queries import (
@@ -193,6 +195,7 @@ class FinanceQueryService:
         *,
         limit: int,
         raw_cursor: str | None,
+        filters: TransactionListFilters | None = None,
     ) -> TransactionCursorPage:
         """Read one deterministic page of the current active dataset.
 
@@ -209,17 +212,29 @@ class FinanceQueryService:
                 now=now,
             )
             owner_id = authenticated.owner.owner_id
+            active_filters = filters if filters is not None else EMPTY_TRANSACTION_LIST_FILTERS
             cursor = (
-                self._cursor_codec.decode(owner_id, raw_cursor) if raw_cursor is not None else None
+                self._cursor_codec.decode(
+                    owner_id,
+                    raw_cursor,
+                    filters=active_filters,
+                )
+                if raw_cursor is not None
+                else None
             )
             page = await ListTransactionsByCursor(uow.finance)(
                 owner_id,
                 cursor=cursor,
                 limit=limit,
+                filters=active_filters,
             )
             next_cursor = None
             if page.has_more:
-                next_cursor = self._cursor_codec.encode(owner_id, page.items[-1].cursor)
+                next_cursor = self._cursor_codec.encode(
+                    owner_id,
+                    page.items[-1].cursor,
+                    filters=active_filters,
+                )
             return TransactionCursorPage(
                 items=tuple(item.transaction for item in page.items),
                 next_cursor=next_cursor,

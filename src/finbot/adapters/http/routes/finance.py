@@ -25,6 +25,7 @@ from finbot.adapters.http.finance.request import (
     canonical_uuid,
     strict_query,
     timeseries_grain,
+    transaction_list_filters,
     utc_timestamp,
     validate_comparison,
     validate_period,
@@ -58,7 +59,19 @@ _SESSION_SECURITY: dict[str, Any] = {
 _PERIOD_QUERY = frozenset({"start", "end", "category_limit", "transaction_limit"})
 _COMPARE_QUERY = frozenset({"current_start", "current_end", "previous_start", "previous_end"})
 _TIMESERIES_QUERY = frozenset({"start", "end", "grain"})
-_TRANSACTION_QUERY = frozenset({"limit", "cursor"})
+_ACTIVE_TRANSACTION_QUERY = frozenset(
+    {
+        "limit",
+        "cursor",
+        "start",
+        "end",
+        "type",
+        "account_id",
+        "category_id",
+        "currency",
+    }
+)
+_DELETED_TRANSACTION_QUERY = frozenset({"limit", "cursor"})
 _UTC_DATE_SCHEMA = {
     "description": "UTC RFC 3339 timestamp with optional 1-6 fractional digits and `Z`.",
     "format": "date-time",
@@ -74,11 +87,11 @@ def _error_responses(*statuses: int) -> dict[int | str, dict[str, Any]]:
     return {status: {"model": ApiErrorResponse} for status in statuses}
 
 
-def _date_parameter(name: str) -> dict[str, Any]:
+def _date_parameter(name: str, *, required: bool = True) -> dict[str, Any]:
     return {
         "in": "query",
         "name": name,
-        "required": True,
+        "required": required,
         "schema": _UTC_DATE_SCHEMA,
     }
 
@@ -90,6 +103,55 @@ def _limit_parameter(name: str, default: int) -> dict[str, Any]:
         "required": False,
         "schema": {"default": default, "maximum": 100, "minimum": 1, "type": "integer"},
     }
+
+
+def _transaction_filter_parameters() -> list[dict[str, Any]]:
+    start = _date_parameter("start", required=False)
+    start["description"] = (
+        "Inclusive UTC occurrence boundary. Must be provided together with `end`; "
+        "the maximum span is 366 days."
+    )
+    end = _date_parameter("end", required=False)
+    end["description"] = (
+        "Exclusive UTC occurrence boundary. Must be provided together with `start`; "
+        "the maximum span is 366 days."
+    )
+    return [
+        start,
+        end,
+        {
+            "in": "query",
+            "name": "type",
+            "required": False,
+            "schema": {"enum": ["expense", "income"], "type": "string"},
+        },
+        *[
+            {
+                "in": "query",
+                "name": name,
+                "required": False,
+                "schema": {
+                    "format": "uuid",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": CANONICAL_UUID_PATTERN,
+                    "type": "string",
+                },
+            }
+            for name in ("account_id", "category_id")
+        ],
+        {
+            "in": "query",
+            "name": "currency",
+            "required": False,
+            "schema": {
+                "maxLength": 3,
+                "minLength": 3,
+                "pattern": r"^[A-Z]{3}$",
+                "type": "string",
+            },
+        },
+    ]
 
 
 async def _safe_session_call[ResultT](
@@ -263,14 +325,15 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
             "parameters": [
                 SESSION_BINDING_OPENAPI_PARAMETER,
                 _limit_parameter("limit", DEFAULT_TRANSACTION_LIMIT),
+                *_transaction_filter_parameters(),
                 {
                     "in": "query",
                     "name": "cursor",
                     "required": False,
                     "schema": {
                         "description": (
-                            "Signed integrity-protected owner-bound cursor. It is not encrypted; "
-                            "clients must treat it as opaque and must not parse it."
+                            "Signed integrity-protected owner- and filter-bound cursor. It is not "
+                            "encrypted; clients must treat it as opaque and must not parse it."
                         ),
                         "maxLength": 76,
                         "minLength": 76,
@@ -282,15 +345,17 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
         },
     )
     async def transactions(request: Request) -> TransactionPageResponse:
-        query = strict_query(request, allowed=_TRANSACTION_QUERY)
+        query = strict_query(request, allowed=_ACTIVE_TRANSACTION_QUERY)
         limit = bounded_limit(query.get("limit"), default=DEFAULT_TRANSACTION_LIMIT)
         cursor = canonical_cursor(query.get("cursor"))
+        filters = transaction_list_filters(query)
 
         async def execute(credentials: SessionCredentials) -> TransactionCursorPage:
             return await service.transactions(
                 credentials,
                 limit=limit,
                 raw_cursor=cursor,
+                filters=filters,
             )
 
         result = await _safe_session_call(request, execute)
@@ -327,7 +392,7 @@ def finance_router(service: FinanceQueryService) -> APIRouter:
         },
     )
     async def deleted_transactions(request: Request) -> TransactionPageResponse:
-        query = strict_query(request, allowed=_TRANSACTION_QUERY)
+        query = strict_query(request, allowed=_DELETED_TRANSACTION_QUERY)
         limit = bounded_limit(query.get("limit"), default=DEFAULT_TRANSACTION_LIMIT)
         cursor = canonical_cursor(query.get("cursor"))
 

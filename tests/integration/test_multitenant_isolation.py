@@ -451,6 +451,7 @@ async def test_two_tenants_share_names_and_keys_without_sharing_financial_state(
     first_tokens = _Tokens(_opaque_token(31), _opaque_token(32))
     second_tokens = _Tokens(_opaque_token(41), _opaque_token(42))
     shared_idempotency_key = _opaque_token(51)
+    shared_amount_text = "500"
     first_amounts = (91_827_364_501, 91_827_364_502)
     second_amount = 81_726_354_403
     try:
@@ -489,8 +490,14 @@ async def test_two_tenants_share_names_and_keys_without_sharing_financial_state(
         )
         app, mutations = _tenant_app(factory, frozenset(telegram_ids))
         first_draft, second_draft = await asyncio.gather(
-            mutations.create_draft(first_tokens.credentials(shared_idempotency_key)),
-            mutations.create_draft(second_tokens.credentials(shared_idempotency_key)),
+            mutations.begin_quick_draft(
+                first_tokens.credentials(shared_idempotency_key),
+                shared_amount_text,
+            ),
+            mutations.begin_quick_draft(
+                second_tokens.credentials(shared_idempotency_key),
+                shared_amount_text,
+            ),
         )
         assert first_draft.result_id is not None and second_draft.result_id is not None
         assert first_draft.result_id != second_draft.result_id
@@ -768,6 +775,9 @@ async def test_two_tenants_share_names_and_keys_without_sharing_financial_state(
         assert len(drafts) == 2
         assert {draft.user_id for draft in drafts} == {first.owner_id, second.owner_id}
         assert all(draft.revision == 1 for draft in drafts)
+        assert all(draft.state == "wizard_type" for draft in drafts)
+        assert all(draft.payload["amount_minor"] == 50_000 for draft in drafts)
+        assert all(draft.payload["input_mode"] == "amount_only" for draft in drafts)
         assert len(idempotency) == 2
         assert {record.user_id for record in idempotency} == {
             first.owner_id,

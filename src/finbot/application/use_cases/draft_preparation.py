@@ -2,6 +2,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from finbot.application.draft_preparation import (
+    AmountOnlyQuickDraft,
     DraftCatalogResolver,
     DraftPreparationClock,
     DraftPreparationState,
@@ -9,6 +10,7 @@ from finbot.application.draft_preparation import (
     PrepareParsedDraftCommand,
     PrepareQuickDraftCommand,
     QuickDraftParser,
+    SignedAmountOnlyQuickDraftError,
 )
 from finbot.application.dto import (
     AccountSnapshot,
@@ -158,6 +160,17 @@ class PrepareQuickDraft:
             raise EntityNotFoundError("Владелец не найден")
         try:
             draft = self._parser.parse(command.text, timezone=owner.timezone)
+        except SignedAmountOnlyQuickDraftError:
+            raise ApplicationValidationError("Отправьте сумму без знака, например: 500") from None
         except ValueError:
             raise ApplicationValidationError("Быстрый ввод не распознан") from None
+        if isinstance(draft, AmountOnlyQuickDraft):
+            return PreparedDraftResult(
+                DraftPreparationState.TYPE_REQUIRED,
+                {
+                    "flow": command.flow,
+                    "input_mode": "amount_only",
+                    "amount_minor": draft.amount_minor,
+                },
+            )
         return await self._parsed_drafts.prepare_for_owner(owner, draft, flow=command.flow)

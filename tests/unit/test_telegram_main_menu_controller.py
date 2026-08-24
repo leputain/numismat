@@ -17,7 +17,7 @@ from finbot.adapters.telegram.executor import (
     TelegramMutationExecutor,
     TelegramMutationRequest,
 )
-from finbot.adapters.telegram.ui import MAIN_MENU
+from finbot.adapters.telegram.ui import MAIN_MENU, MORE_MENU
 from finbot.application.dto import DraftRef, DraftSnapshot
 from finbot.application.ports import DraftRepository
 
@@ -281,3 +281,18 @@ def test_navigation_renderers_preserve_the_persistent_main_menu(
 
 def test_quick_help_preserves_its_markup_free_behavior() -> None:
     assert render_main_menu(MainMenuAction.QUICK_HELP).reply_markup is None
+
+
+def test_primary_menu_is_bounded_to_four_frequent_actions() -> None:
+    assert [[button.text for button in row] for row in MAIN_MENU.keyboard] == [
+        ["➕ Добавить", "📅 Сегодня"],
+        ["🧾 Операции", "••• Ещё"],
+    ]
+    assert MAIN_MENU.input_field_placeholder == "Например: 500"
+
+
+def test_more_menu_keeps_secondary_actions_reachable() -> None:
+    message = render_main_menu(MainMenuAction.MORE)
+
+    assert message.reply_markup is MORE_MENU
+    assert [button.text for button in MORE_MENU.keyboard[-1]] == ["🏠 Меню"]

@@ -1,11 +1,16 @@
 from uuid import UUID
 
+from finbot.application.draft_composition import (
+    DraftComposePreparer,
+    PrepareComposedDraftCommand,
+)
 from finbot.application.draft_conflicts import (
     PENDING_DRAFT_INTENT_KEY,
     DraftConflictReplacementPreparer,
     DraftConflictReplacementTargets,
     DraftConflictRepository,
     DraftConflictResult,
+    PendingComposeIntent,
     PendingDraftIntent,
     PendingEditIntent,
     PendingQuickIntent,
@@ -16,7 +21,11 @@ from finbot.application.draft_conflicts import (
     ResolveDraftConflictCommand,
     decode_pending_draft_intent,
 )
-from finbot.application.draft_preparation import PrepareQuickDraftCommand
+from finbot.application.draft_preparation import (
+    DraftPreparationState,
+    PreparedDraftResult,
+    PrepareQuickDraftCommand,
+)
 from finbot.application.dto import (
     DraftConflictResolution,
     DraftSnapshot,
@@ -57,15 +66,18 @@ def _repeat_matches_authority(
 class PrepareDraftConflictReplacement:
     """Turn a typed pending intent into an authoritative replacement draft."""
 
-    __slots__ = ("_quick_drafts", "_targets")
+    __slots__ = ("_compose_drafts", "_quick_drafts", "_targets")
 
     def __init__(
         self,
         quick_drafts: QuickDraftConflictPreparer,
         targets: DraftConflictReplacementTargets,
+        *,
+        compose_drafts: DraftComposePreparer | None = None,
     ) -> None:
         self._quick_drafts = quick_drafts
         self._targets = targets
+        self._compose_drafts = compose_drafts
 
     async def prepare(
         self,
@@ -83,6 +95,22 @@ class PrepareDraftConflictReplacement:
             return PreparedDraftConflictReplacement(
                 quick_prepared.state.value,
                 quick_prepared.payload,
+            )
+        if isinstance(intent, PendingComposeIntent):
+            if self._compose_drafts is None:
+                raise InvalidStateError("Безопасная замена черновика пока недоступна")
+            composed = await self._compose_drafts.execute(
+                PrepareComposedDraftCommand(owner_id, intent.values)
+            )
+            if (
+                not isinstance(composed, PreparedDraftResult)
+                or composed.state is not DraftPreparationState.REVIEW
+                or composed.payload.get("flow") != "quick"
+            ):
+                raise InvalidStateError("Новое действие устарело")
+            return PreparedDraftConflictReplacement(
+                composed.state.value,
+                composed.payload,
             )
         if isinstance(intent, PendingRepeatIntent):
             if intent.source_transaction_id is None or intent.source_version is None:

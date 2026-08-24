@@ -1,6 +1,11 @@
 import pytest
 
+from finbot.adapters.deterministic_draft_parser import DeterministicQuickDraftParser
 from finbot.adapters.telegram.parser import DeterministicParser
+from finbot.application.draft_preparation import (
+    AmountOnlyQuickDraft,
+    SignedAmountOnlyQuickDraftError,
+)
 from finbot.domain.money import MAX_MINOR_UNITS, MoneyError, parse_minor
 
 
@@ -73,3 +78,64 @@ def test_parser_rejects_broken_or_duplicate_hints():
 def test_keyword_matching_uses_whole_tokens() -> None:
     draft = DeterministicParser().parse("1450 метрополитен")
     assert draft.category_hint is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_minor"),
+    [
+        ("500", 50_000),
+        ("500,50", 50_050),
+        ("500.50", 50_050),
+        ("1 200", 120_000),
+        ("1\u00a0200,50", 120_050),
+        ("12 345 678,90", 1_234_567_890),
+    ],
+)
+def test_quick_parser_classifies_strict_amount_only_input(
+    text: str,
+    expected_minor: int,
+) -> None:
+    result = DeterministicQuickDraftParser().parse(text, timezone="Europe/Moscow")
+
+    assert isinstance(result, AmountOnlyQuickDraft)
+    assert result.amount_minor == expected_minor
+
+
+@pytest.mark.parametrize("text", ["+500", "-500"])
+def test_quick_parser_reports_a_safe_error_for_signed_amount_only_input(text: str) -> None:
+    with pytest.raises(SignedAmountOnlyQuickDraftError) as caught:
+        DeterministicQuickDraftParser().parse(text, timezone="Europe/Moscow")
+
+    assert text not in repr(caught.value)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "0",
+        "-0",
+        "0500",
+        "00.50",
+        "000 500",
+        "1.500",
+        "12 34",
+        "12\t34",
+        "1 23 456",
+        "1 200\u00a0000",
+        "1e2",
+        "500 RUB",
+        "₽500",
+        "пятьсот",
+    ],
+)
+def test_quick_parser_rejects_invalid_amount_only_forms(text: str) -> None:
+    with pytest.raises(ValueError):
+        DeterministicQuickDraftParser().parse(text, timezone="Europe/Moscow")
+
+
+@pytest.mark.parametrize("text", ["+500 зарплата", "-500 кафе", "500 кофе"])
+def test_quick_parser_preserves_legacy_amount_and_description_syntax(text: str) -> None:
+    result = DeterministicQuickDraftParser().parse(text, timezone="Europe/Moscow")
+
+    assert not isinstance(result, AmountOnlyQuickDraft)
+    assert result.description

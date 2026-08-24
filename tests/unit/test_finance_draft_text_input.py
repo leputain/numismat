@@ -287,23 +287,25 @@ async def test_description_dash_clears_comment_and_rule_learning() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("back_state", "resolved", "expected_state"),
+    ("back_state", "resolved", "expected_state", "amount_only"),
     [
-        ("wizard_category", True, "wizard_account"),
-        ("review_category", True, "quick_confirm"),
-        ("category_required", True, "review"),
-        ("category_required", False, "account_required"),
+        ("wizard_category", True, "wizard_account", False),
+        ("wizard_category", True, "wizard_account", True),
+        ("review_category", True, "quick_confirm", False),
+        ("category_required", True, "review", False),
+        ("category_required", False, "account_required", False),
     ],
 )
 async def test_custom_category_preserves_navigation_and_rule_semantics(
     back_state: str,
     resolved: bool,
     expected_state: str,
+    amount_only: bool,
 ) -> None:
     payload = _payload("custom_category")
     payload.update(
         {
-            "flow": "quick" if back_state != "wizard_category" else "wizard",
+            "flow": "quick" if amount_only or back_state != "wizard_category" else "wizard",
             "custom_back_state": back_state,
             "review_return_state": "quick_confirm",
             "description": "кофе зерно",
@@ -311,6 +313,8 @@ async def test_custom_category_preserves_navigation_and_rule_semantics(
             "pending_rule": {"scope": "global"},
         }
     )
+    if amount_only:
+        payload["input_mode"] = "amount_only"
     use_case, _, dependencies, draft = await _subject("custom_category", payload=payload)
     dependencies.resolved_account = dependencies.accounts[0] if resolved else None
 
@@ -333,18 +337,20 @@ async def test_custom_category_preserves_navigation_and_rule_semantics(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("flow", "back_state", "expected_state"),
+    ("flow", "back_state", "expected_state", "amount_only"),
     [
-        ("wizard", "wizard_account", "wizard_date"),
-        ("quick", "quick_account", "quick_confirm"),
-        ("quick", "account_required", "review"),
-        ("quick", "review_account", "review"),
+        ("wizard", "wizard_account", "wizard_date", False),
+        ("quick", "wizard_account", "wizard_date", True),
+        ("quick", "quick_account", "quick_confirm", False),
+        ("quick", "account_required", "review", False),
+        ("quick", "review_account", "review", False),
     ],
 )
 async def test_custom_account_preserves_flow_and_safe_return_state(
     flow: str,
     back_state: str,
     expected_state: str,
+    amount_only: bool,
 ) -> None:
     payload = _payload("custom_account")
     payload.update(
@@ -356,6 +362,8 @@ async def test_custom_account_preserves_flow_and_safe_return_state(
             "pending_rule": {"scope": "account"},
         }
     )
+    if amount_only:
+        payload["input_mode"] = "amount_only"
     use_case, _, _, draft = await _subject("custom_account", payload=payload)
 
     result = await use_case.execute(

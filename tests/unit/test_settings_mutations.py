@@ -82,14 +82,18 @@ class _SettingsRepository:
     async def change_timezone(
         self,
         owner_id: UUID,
-        expected_timezone: str,
+        expected_version: int,
         timezone: str,
     ) -> OwnerSnapshot:
         assert owner_id == OWNER_ID
         self.events.append("timezone")
-        if self.owner.timezone != expected_timezone:
-            raise ObjectVersionConflictError()
-        self.owner = replace(self.owner, timezone=timezone)
+        if self.owner.settings_version != expected_version:
+            raise ObjectVersionConflictError(current_version=self.owner.settings_version)
+        self.owner = replace(
+            self.owner,
+            timezone=timezone,
+            settings_version=self.owner.settings_version + 1,
+        )
         return self.owner
 
 
@@ -184,13 +188,14 @@ async def test_active_draft_is_preserved_when_settings_ingress_conflicts() -> No
 async def test_timezone_mutation_validates_iana_zone_and_authoritative_result() -> None:
     repository = _SettingsRepository()
     result = await ChangeSettingsTimezone(repository).execute(
-        ChangeTimezoneCommand(OWNER_ID, "Europe/Moscow", "Asia/Yekaterinburg")
+        ChangeTimezoneCommand(OWNER_ID, 1, "Asia/Yekaterinburg")
     )
     assert result.timezone == "Asia/Yekaterinburg"
+    assert result.settings_version == 2
 
     with pytest.raises(ApplicationValidationError, match="Неизвестный"):
         await ChangeSettingsTimezone(repository).execute(
-            ChangeTimezoneCommand(OWNER_ID, result.timezone, "Not/AZone")
+            ChangeTimezoneCommand(OWNER_ID, 2, "Not/AZone")
         )
 
 
@@ -200,7 +205,7 @@ def test_settings_commands_hide_owner_and_target_values_from_repr() -> None:
         BeginAccountRenameCommand(OWNER_ID, ACCOUNT_ID, 4),
         BeginCategoryCreateCommand(OWNER_ID, TransactionType.EXPENSE),
         BeginCategoryRenameCommand(OWNER_ID, CATEGORY_ID, 7),
-        ChangeTimezoneCommand(OWNER_ID, "Europe/Moscow", "Asia/Omsk"),
+        ChangeTimezoneCommand(OWNER_ID, 1, "Asia/Omsk"),
     )
     for command in commands:
         rendered = repr(command)

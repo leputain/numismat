@@ -3,7 +3,7 @@ import os
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -44,6 +44,9 @@ def _synthetic_telegram_user_id() -> int:
 
 async def _remove_test_catalog(engine: AsyncEngine, user_id: UUID) -> None:
     async with engine.begin() as connection:
+        await connection.execute(
+            update(User).where(User.id == user_id).values(default_account_id=None)
+        )
         await connection.execute(delete(Account).where(Account.user_id == user_id))
         await connection.execute(delete(User).where(User.id == user_id))
 
@@ -56,7 +59,8 @@ async def test_catalog_locks_refresh_preloaded_identity_map_values() -> None:
 
     try:
         async with factory() as setup:
-            user = User(telegram_user_id=_synthetic_telegram_user_id())
+            telegram_id = _synthetic_telegram_user_id()
+            user = User(telegram_user_id=telegram_id, telegram_chat_id=telegram_id)
             setup.add(user)
             await setup.flush()
             primary = Account(user_id=user.id, name="Основной", slug="основной")
@@ -126,7 +130,8 @@ async def test_concurrent_create_and_rename_same_slug_return_domain_error() -> N
 
     try:
         async with factory() as setup:
-            user = User(telegram_user_id=_synthetic_telegram_user_id())
+            telegram_id = _synthetic_telegram_user_id()
+            user = User(telegram_user_id=telegram_id, telegram_chat_id=telegram_id)
             setup.add(user)
             await setup.flush()
             original = Account(user_id=user.id, name="Старое имя", slug="старое-имя")

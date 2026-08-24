@@ -1,11 +1,14 @@
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Protocol
 from uuid import UUID
 
+from finbot.application.draft_composition import ComposedDraftInput
+from finbot.application.draft_navigation import DraftCatalogRef
 from finbot.application.draft_preparation import (
     PreparedDraftResult,
     PrepareQuickDraftCommand,
@@ -19,6 +22,8 @@ from finbot.application.dto import (
     ReviewedTransactionInput,
 )
 from finbot.application.errors import InvalidStateError
+from finbot.domain.money import MoneyError, validate_minor
+from finbot.domain.transactions import TransactionType
 
 PENDING_DRAFT_INTENT_KEY = "pending_intent"
 _MAX_QUICK_TEXT_LENGTH = 4096
@@ -79,6 +84,7 @@ _EDIT_LEGACY_METADATA_KEYS = frozenset(
 class PendingDraftIntentKind(StrEnum):
     WIZARD = "wizard"
     QUICK = "quick"
+    COMPOSE = "compose"
     REPEAT = "repeat"
     EDIT = "edit"
 
@@ -98,6 +104,16 @@ class PendingQuickIntent:
             raise TypeError("Quick draft text must be a string")
         if not self.text.strip() or len(self.text) > _MAX_QUICK_TEXT_LENGTH:
             raise ValueError("Quick draft text is invalid")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class PendingComposeIntent:
+    values: ComposedDraftInput = field(repr=False)
+    kind: PendingDraftIntentKind = field(default=PendingDraftIntentKind.COMPOSE, init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.values, ComposedDraftInput):
+            raise TypeError("Composed draft intent is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,7 +216,11 @@ class PendingEditIntent:
 
 
 type PendingDraftIntent = (
-    PendingWizardIntent | PendingQuickIntent | PendingRepeatIntent | PendingEditIntent
+    PendingWizardIntent
+    | PendingQuickIntent
+    | PendingComposeIntent
+    | PendingRepeatIntent
+    | PendingEditIntent
 )
 
 
@@ -342,6 +362,84 @@ def _decode_edit(value: Mapping[str, Any]) -> PendingEditIntent:
         raise _invalid_intent() from None
 
 
+_COMPOSE_REQUIRED_KEYS = frozenset({"kind", "type", "amount_minor", "occurred_at", "description"})
+_COMPOSE_OPTIONAL_KEYS = frozenset(
+    {"account_id", "account_version", "category_id", "category_version"}
+)
+
+
+def _decode_compose_reference(
+    value: Mapping[str, Any],
+    *,
+    id_key: str,
+    version_key: str,
+) -> DraftCatalogRef | None:
+    id_present = id_key in value
+    version_present = version_key in value
+    if not id_present and not version_present:
+        return None
+    if id_present != version_present:
+        raise _invalid_intent()
+    raw_id = value.get(id_key)
+    raw_version = value.get(version_key)
+    if not isinstance(raw_id, str):
+        raise _invalid_intent()
+    try:
+        entity_id = UUID(raw_id)
+        if str(entity_id) != raw_id:
+            raise _invalid_intent()
+        if isinstance(raw_version, bool) or not isinstance(raw_version, int):
+            raise _invalid_intent()
+        return DraftCatalogRef(entity_id, raw_version)
+    except InvalidStateError:
+        raise
+    except TypeError, ValueError:
+        raise _invalid_intent() from None
+
+
+def _decode_compose(value: Mapping[str, Any]) -> PendingComposeIntent:
+    _require_exact_keys(value, _COMPOSE_REQUIRED_KEYS | _COMPOSE_OPTIONAL_KEYS)
+    if not _COMPOSE_REQUIRED_KEYS.issubset(value):
+        raise _invalid_intent()
+    raw_amount = value.get("amount_minor")
+    raw_occurred = value.get("occurred_at")
+    description = value.get("description")
+    if (
+        isinstance(raw_amount, bool)
+        or not isinstance(raw_amount, int)
+        or not isinstance(raw_occurred, str)
+        or not isinstance(description, str)
+        or len(description) > 500
+    ):
+        raise _invalid_intent()
+    try:
+        validate_minor(raw_amount)
+        occurred_at = datetime.fromisoformat(raw_occurred)
+        if occurred_at.utcoffset() is None or occurred_at.isoformat() != raw_occurred:
+            raise _invalid_intent()
+        values = ComposedDraftInput(
+            kind=TransactionType(str(value.get("type", ""))),
+            amount_minor=raw_amount,
+            occurred_at=occurred_at,
+            account=_decode_compose_reference(
+                value,
+                id_key="account_id",
+                version_key="account_version",
+            ),
+            category=_decode_compose_reference(
+                value,
+                id_key="category_id",
+                version_key="category_version",
+            ),
+            description=description,
+        )
+        return PendingComposeIntent(values)
+    except InvalidStateError:
+        raise
+    except MoneyError, TypeError, ValueError:
+        raise _invalid_intent() from None
+
+
 def decode_pending_draft_intent(value: object) -> PendingDraftIntent:
     """Decode the bounded business intent while dropping known legacy UI metadata."""
 
@@ -362,6 +460,8 @@ def decode_pending_draft_intent(value: object) -> PendingDraftIntent:
             )
         except TypeError, ValueError:
             raise _invalid_intent() from None
+    if kind is PendingDraftIntentKind.COMPOSE:
+        return _decode_compose(value)
     if kind is PendingDraftIntentKind.REPEAT:
         return _decode_repeat(value)
     return _decode_edit(value)
@@ -372,6 +472,30 @@ def encode_pending_draft_intent(intent: PendingDraftIntent) -> dict[str, object]
         return {"kind": intent.kind.value}
     if isinstance(intent, PendingQuickIntent):
         return {"kind": intent.kind.value, "text": intent.text}
+    if isinstance(intent, PendingComposeIntent):
+        values = intent.values
+        encoded: dict[str, object] = {
+            "kind": intent.kind.value,
+            "type": values.kind.value,
+            "amount_minor": values.amount_minor,
+            "occurred_at": values.occurred_at.isoformat(),
+            "description": values.description,
+        }
+        if values.account is not None:
+            encoded.update(
+                {
+                    "account_id": str(values.account.entity_id),
+                    "account_version": values.account.version,
+                }
+            )
+        if values.category is not None:
+            encoded.update(
+                {
+                    "category_id": str(values.category.entity_id),
+                    "category_version": values.category.version,
+                }
+            )
+        return encoded
     if isinstance(intent, PendingRepeatIntent):
         return {
             "kind": intent.kind.value,

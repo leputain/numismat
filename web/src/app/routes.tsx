@@ -1,25 +1,85 @@
-import { Route, Routes, useParams } from "react-router";
+import { lazy, Suspense } from "react";
+import type { ComponentType } from "react";
+import { Outlet, Route, Routes, useParams } from "react-router";
 
-import { DashboardPage } from "../features/dashboard/dashboard-page";
-import { AnalyticsPage } from "../features/analytics/analytics-page";
-import { DraftPage } from "../features/drafts/draft-page";
-import { BankImportDetailPage } from "../features/bank-imports/bank-import-detail-page";
-import { BankImportsPage } from "../features/bank-imports/bank-imports-page";
-import { ExchangeRatePublishPage } from "../features/exchange-rates/exchange-rate-publish-page";
-import { ExchangeRateSourcePage } from "../features/exchange-rates/exchange-rate-source-page";
-import { ExchangeRateVersionPage } from "../features/exchange-rates/exchange-rate-version-page";
-import { ExchangeRatesPage } from "../features/exchange-rates/exchange-rates-page";
-import { BudgetDetailPage } from "../features/budgets/budget-detail-page";
-import { BudgetEditorPage } from "../features/budgets/budget-editor-page";
-import { BudgetsPage } from "../features/budgets/budgets-page";
-import { RecurringDetailPage } from "../features/recurring/recurring-detail-page";
-import { RecurringEditorPage } from "../features/recurring/recurring-editor-page";
-import { RecurringPage } from "../features/recurring/recurring-page";
-import { TransactionDetailPage } from "../features/transactions/transaction-detail-page";
-import { TransactionsPage } from "../features/transactions/transactions-page";
-import { MorePage } from "../features/more/more-page";
+import { PageSkeleton } from "../shared/components/async-state";
 import { RouteErrorState } from "./states/route-error-state";
 import { AppShell } from "./shell/app-shell";
+
+function lazyNamed<TProps extends object>(
+  loader: () => Promise<ComponentType<TProps>>,
+) {
+  return lazy(async () => ({ default: await loader() }));
+}
+
+const DashboardPage = lazyNamed(async () =>
+  (await import("../features/dashboard/dashboard-page")).DashboardPage
+);
+const AnalyticsPage = lazyNamed(async () =>
+  (await import("../features/analytics/analytics-page")).AnalyticsPage
+);
+const DraftPage = lazyNamed(async () =>
+  (await import("../features/drafts/draft-page")).DraftPage
+);
+const ComposeDraftPage = lazyNamed(async () =>
+  (await import("../features/drafts/compose-draft-page")).ComposeDraftPage
+);
+const BankImportDetailPage = lazyNamed(async () =>
+  (await import("../features/bank-imports/bank-import-detail-page")).BankImportDetailPage
+);
+const BankImportsPage = lazyNamed(async () =>
+  (await import("../features/bank-imports/bank-imports-page")).BankImportsPage
+);
+const ExchangeRatePublishPage = lazyNamed(async () =>
+  (await import("../features/exchange-rates/exchange-rate-publish-page"))
+    .ExchangeRatePublishPage
+);
+const ExchangeRateSourcePage = lazyNamed(async () =>
+  (await import("../features/exchange-rates/exchange-rate-source-page")).ExchangeRateSourcePage
+);
+const ExchangeRateVersionPage = lazyNamed(async () =>
+  (await import("../features/exchange-rates/exchange-rate-version-page"))
+    .ExchangeRateVersionPage
+);
+const ExchangeRatesPage = lazyNamed(async () =>
+  (await import("../features/exchange-rates/exchange-rates-page")).ExchangeRatesPage
+);
+const BudgetDetailPage = lazyNamed(async () =>
+  (await import("../features/budgets/budget-detail-page")).BudgetDetailPage
+);
+const BudgetEditorPage = lazyNamed(async () =>
+  (await import("../features/budgets/budget-editor-page")).BudgetEditorPage
+);
+const BudgetsPage = lazyNamed(async () =>
+  (await import("../features/budgets/budgets-page")).BudgetsPage
+);
+const RecurringDetailPage = lazyNamed(async () =>
+  (await import("../features/recurring/recurring-detail-page")).RecurringDetailPage
+);
+const RecurringEditorPage = lazyNamed(async () =>
+  (await import("../features/recurring/recurring-editor-page")).RecurringEditorPage
+);
+const RecurringPage = lazyNamed(async () =>
+  (await import("../features/recurring/recurring-page")).RecurringPage
+);
+const TransactionDetailPage = lazyNamed(async () =>
+  (await import("../features/transactions/transaction-detail-page")).TransactionDetailPage
+);
+const TransactionsPage = lazyNamed(async () =>
+  (await import("../features/transactions/transactions-page")).TransactionsPage
+);
+const MorePage = lazyNamed(async () =>
+  (await import("../features/more/more-page")).MorePage
+);
+const AccountsPage = lazyNamed(async () =>
+  (await import("../features/catalogs/accounts-page")).AccountsPage
+);
+const CategoriesPage = lazyNamed(async () =>
+  (await import("../features/catalogs/categories-page")).CategoriesPage
+);
+const SettingsPage = lazyNamed(async () =>
+  (await import("../features/settings/settings-page")).SettingsPage
+);
 
 const CANONICAL_LOWERCASE_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -120,32 +180,46 @@ function ExchangeRateVersionRoute() {
   return <ExchangeRateVersionPage versionId={versionId} />;
 }
 
+export function RouteLoadingBoundary() {
+  return (
+    <Suspense fallback={<PageSkeleton rows={4} />}>
+      <Outlet />
+    </Suspense>
+  );
+}
+
 export function AppRoutes() {
   return (
     <Routes>
       <Route element={<AppShell />}>
-        <Route element={<DashboardPage />} index />
-        <Route element={<AnalyticsPage />} path="analytics" />
-        <Route element={<TransactionsPage />} path="transactions" />
-        <Route element={<TransactionDetailRoute />} path="transactions/:transactionId" />
-        <Route element={<BankImportsPage />} path="imports" />
-        <Route element={<BankImportDetailRoute />} path="imports/:batchId" />
-        <Route element={<BudgetsPage />} path="budgets" />
-        <Route element={<BudgetEditorPage />} path="budgets/new" />
-        <Route element={<BudgetEditRoute />} path="budgets/:budgetId/edit" />
-        <Route element={<BudgetDetailRoute />} path="budgets/:budgetId" />
-        <Route element={<RecurringPage />} path="recurring" />
-        <Route element={<RecurringEditorPage />} path="recurring/new" />
-        <Route element={<RecurringEditRoute />} path="recurring/:scheduleId/edit" />
-        <Route element={<RecurringDetailRoute />} path="recurring/:scheduleId" />
-        <Route element={<ExchangeRatesPage />} path="rates" />
-        <Route element={<ExchangeRatePublishPage />} path="rates/new" />
-        <Route element={<ExchangeRatePublishRoute />} path="rates/:sourceId/publish" />
-        <Route element={<ExchangeRateSourceRoute />} path="rates/:sourceId" />
-        <Route element={<ExchangeRateVersionRoute />} path="rates/versions/:versionId" />
-        <Route element={<DraftPage />} path="draft" />
-        <Route element={<MorePage />} path="more" />
-        <Route element={<RouteErrorState />} path="*" />
+        <Route element={<RouteLoadingBoundary />}>
+          <Route element={<DashboardPage />} index />
+          <Route element={<AnalyticsPage />} path="analytics" />
+          <Route element={<TransactionsPage />} path="transactions" />
+          <Route element={<TransactionDetailRoute />} path="transactions/:transactionId" />
+          <Route element={<BankImportsPage />} path="imports" />
+          <Route element={<BankImportDetailRoute />} path="imports/:batchId" />
+          <Route element={<BudgetsPage />} path="budgets" />
+          <Route element={<BudgetEditorPage />} path="budgets/new" />
+          <Route element={<BudgetEditRoute />} path="budgets/:budgetId/edit" />
+          <Route element={<BudgetDetailRoute />} path="budgets/:budgetId" />
+          <Route element={<RecurringPage />} path="recurring" />
+          <Route element={<RecurringEditorPage />} path="recurring/new" />
+          <Route element={<RecurringEditRoute />} path="recurring/:scheduleId/edit" />
+          <Route element={<RecurringDetailRoute />} path="recurring/:scheduleId" />
+          <Route element={<ExchangeRatesPage />} path="rates" />
+          <Route element={<ExchangeRatePublishPage />} path="rates/new" />
+          <Route element={<ExchangeRatePublishRoute />} path="rates/:sourceId/publish" />
+          <Route element={<ExchangeRateSourceRoute />} path="rates/:sourceId" />
+          <Route element={<ExchangeRateVersionRoute />} path="rates/versions/:versionId" />
+          <Route element={<DraftPage />} path="draft" />
+          <Route element={<ComposeDraftPage />} path="draft/compose" />
+          <Route element={<MorePage />} path="more" />
+          <Route element={<AccountsPage />} path="accounts" />
+          <Route element={<CategoriesPage />} path="categories" />
+          <Route element={<SettingsPage />} path="settings" />
+          <Route element={<RouteErrorState />} path="*" />
+        </Route>
       </Route>
     </Routes>
   );

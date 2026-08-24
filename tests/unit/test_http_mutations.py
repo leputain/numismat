@@ -6,7 +6,7 @@ import json
 import logging
 import warnings
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -37,19 +37,23 @@ from finbot.adapters.http.mutations.service import (
     MutationReceipt,
 )
 from finbot.adapters.http.schemas.mutations import draft_response
+from finbot.application.draft_composition import ComposedDraftInput, ComposeDraftSpec
 from finbot.application.draft_conflicts import (
     PENDING_DRAFT_INTENT_KEY,
+    PendingComposeIntent,
     PendingQuickIntent,
     encode_pending_draft_intent,
 )
 from finbot.application.draft_navigation import (
     DraftCatalogChoice,
+    DraftCatalogRef,
     DraftNavigationAction,
     DraftNavigationStatus,
 )
 from finbot.application.draft_views import project_public_draft
 from finbot.application.dto import DraftRef, DraftSnapshot
 from finbot.application.errors import DraftRevisionConflictError, InvalidStateError
+from finbot.application.notifications import NotificationPreferencesSnapshot
 from finbot.application.revision_mutations import (
     DraftExistingSelection,
     DraftPatchAction,
@@ -59,6 +63,8 @@ from finbot.application.revision_mutations import (
 from finbot.application.transaction_draft_navigation import (
     TransactionDraftNavigationAction,
 )
+from finbot.domain.notifications import NotificationPreferences
+from finbot.domain.transactions import TransactionType
 from finbot.observability.logging import JsonFormatter
 
 ORIGIN = "https://miniapp.example.test"
@@ -116,6 +122,12 @@ class FakeMutationService:
         self.error: Exception | None = None
         self.current = _draft()
         self.patch_receipt: MutationReceipt | None = None
+        self.notification_snapshot = NotificationPreferencesSnapshot(
+            OWNER_ID,
+            "Europe/Moscow",
+            NotificationPreferences(),
+            0,
+        )
 
     def _raise_once(self) -> None:
         if self.error is not None:
@@ -135,6 +147,56 @@ class FakeMutationService:
 
     async def create_draft(self, credentials: MutationCredentials) -> MutationReceipt:
         self.calls.append(("create", credentials))
+        self._raise_once()
+        return MutationReceipt(201, IdempotencyResultKind.DRAFT, DRAFT_ID, 1)
+
+    async def change_timezone(
+        self,
+        credentials: MutationCredentials,
+        timezone: str,
+        version: int,
+    ) -> MutationReceipt:
+        del credentials
+        self.calls.append(("timezone", (timezone, version)))
+        self._raise_once()
+        return MutationReceipt(204, IdempotencyResultKind.NONE)
+
+    async def notification_preferences(
+        self,
+        credentials: SessionCredentials,
+    ) -> NotificationPreferencesSnapshot:
+        self.calls.append(("notification_get", credentials))
+        self._raise_once()
+        return self.notification_snapshot
+
+    async def replace_notification_preferences(
+        self,
+        credentials: MutationCredentials,
+        preferences: NotificationPreferences,
+        version: int,
+    ) -> MutationReceipt:
+        del credentials
+        self.calls.append(("notification_put", (preferences, version)))
+        self._raise_once()
+        return MutationReceipt(204, IdempotencyResultKind.NONE)
+
+    async def begin_quick_draft(
+        self,
+        credentials: MutationCredentials,
+        text: str,
+    ) -> MutationReceipt:
+        del credentials
+        self.calls.append(("quick", text))
+        self._raise_once()
+        return MutationReceipt(201, IdempotencyResultKind.DRAFT, DRAFT_ID, 1)
+
+    async def compose_draft(
+        self,
+        credentials: MutationCredentials,
+        spec: ComposeDraftSpec,
+    ) -> MutationReceipt:
+        del credentials
+        self.calls.append(("compose", spec))
         self._raise_once()
         return MutationReceipt(201, IdempotencyResultKind.DRAFT, DRAFT_ID, 1)
 
@@ -307,6 +369,43 @@ async def test_all_mutation_routes_return_only_minimal_receipts() -> None:
             },
         )
         created = await client.post("/api/v1/drafts", headers=headers, json={})
+        timezone = await client.put(
+            "/api/v1/settings/timezone",
+            headers=headers,
+            json={"timezone": "Asia/Yekaterinburg", "version": 3},
+        )
+        notification_preferences = await client.get(
+            "/api/v1/settings/notifications",
+            headers={
+                "Cookie": headers["Cookie"],
+                "X-Session-Binding": headers["X-Session-Binding"],
+            },
+        )
+        notifications_updated = await client.put(
+            "/api/v1/settings/notifications",
+            headers=headers,
+            json={
+                "budget_80_enabled": True,
+                "budget_100_enabled": False,
+                "recurring_ready_enabled": True,
+                "weekly_digest_enabled": True,
+                "quiet_start": "22:00",
+                "quiet_end": "07:00",
+                "weekly_weekday": 4,
+                "weekly_time": "18:30",
+                "version": 0,
+            },
+        )
+        quick = await client.post(
+            "/api/v1/drafts/quick",
+            headers=headers,
+            json={"text": "500 synthetic"},
+        )
+        composed = await client.post(
+            "/api/v1/drafts/compose",
+            headers=headers,
+            json={"type": "expense", "amount": "500.50"},
+        )
         confirmed = await client.post(
             f"/api/v1/drafts/{DRAFT_ID}/confirm",
             headers=headers,
@@ -355,6 +454,26 @@ async def test_all_mutation_routes_return_only_minimal_receipts() -> None:
     assert "payload" not in detail.json()
     assert created.status_code == 201
     assert created.json() == {"result": {"draft_id": str(DRAFT_ID), "kind": "draft", "revision": 1}}
+    assert timezone.status_code == 204 and not timezone.content
+    assert notification_preferences.status_code == 200
+    assert notification_preferences.json() == {
+        "budget_80_enabled": False,
+        "budget_100_enabled": False,
+        "recurring_ready_enabled": False,
+        "weekly_digest_enabled": False,
+        "quiet_start": None,
+        "quiet_end": None,
+        "weekly_weekday": 0,
+        "weekly_time": "09:00",
+        "version": 0,
+    }
+    assert notifications_updated.status_code == 204 and not notifications_updated.content
+    assert quick.status_code == 201
+    assert quick.json() == {"result": {"draft_id": str(DRAFT_ID), "kind": "draft", "revision": 1}}
+    assert composed.status_code == 201
+    assert composed.json() == {
+        "result": {"draft_id": str(DRAFT_ID), "kind": "draft", "revision": 1}
+    }
     assert confirmed.status_code == 201
     assert confirmed.json() == {
         "result": {
@@ -370,6 +489,106 @@ async def test_all_mutation_routes_return_only_minimal_receipts() -> None:
     assert edit_draft.status_code == 200
     assert deleted.status_code == 200 and deleted.json()["result"]["version"] == 4
     assert restored.status_code == 200 and restored.json()["result"]["version"] == 5
+
+
+@pytest.mark.asyncio
+async def test_timezone_settings_boundary_is_exact_string_and_numeric_version() -> None:
+    service = FakeMutationService()
+    headers = _headers()
+
+    async with _client(_app(service)) as client:
+        accepted = await client.put(
+            "/api/v1/settings/timezone",
+            headers=headers,
+            json={"timezone": "Europe/Samara", "version": 7},
+        )
+        rejected = [
+            await client.put("/api/v1/settings/timezone", headers=headers, json=body)
+            for body in (
+                {"timezone": "", "version": 7},
+                {"timezone": "x" * 65, "version": 7},
+                {"timezone": 123, "version": 7},
+                {"timezone": "Europe/Samara", "version": True},
+                {"timezone": "Europe/Samara", "version": "7"},
+                {"timezone": "Europe/Samara", "version": 0},
+                {"timezone": "Europe/Samara", "version": 7, "extra": False},
+            )
+        ]
+
+    assert accepted.status_code == 204 and not accepted.content
+    assert service.calls == [("timezone", ("Europe/Samara", 7))]
+    assert all(response.status_code == 422 for response in rejected)
+    assert all(response.json()["error"]["code"] == "validation_failed" for response in rejected)
+
+
+@pytest.mark.asyncio
+async def test_notification_preferences_boundary_is_exact_and_versioned() -> None:
+    service = FakeMutationService()
+    headers = _headers()
+    valid = {
+        "budget_80_enabled": True,
+        "budget_100_enabled": False,
+        "recurring_ready_enabled": True,
+        "weekly_digest_enabled": True,
+        "quiet_start": "22:00",
+        "quiet_end": "07:00",
+        "weekly_weekday": 4,
+        "weekly_time": "18:30",
+        "version": 0,
+    }
+    invalid = (
+        {key: value for key, value in valid.items() if key != "budget_80_enabled"},
+        {**valid, "extra": False},
+        {**valid, "budget_80_enabled": "true"},
+        {**valid, "budget_100_enabled": 1},
+        {**valid, "version": True},
+        {**valid, "version": -1},
+        {**valid, "version": 2**31},
+        {**valid, "weekly_weekday": True},
+        {**valid, "weekly_weekday": 7},
+        {**valid, "weekly_time": "9:00"},
+        {**valid, "weekly_time": "24:00"},
+        {**valid, "quiet_start": None},
+        {**valid, "quiet_end": None},
+        {**valid, "quiet_end": "22:00"},
+    )
+
+    async with _client(_app(service)) as client:
+        accepted = await client.put(
+            "/api/v1/settings/notifications",
+            headers=headers,
+            json=valid,
+        )
+        rejected = [
+            await client.put(
+                "/api/v1/settings/notifications",
+                headers=headers,
+                json=body,
+            )
+            for body in invalid
+        ]
+
+    assert accepted.status_code == 204 and not accepted.content
+    assert service.calls == [
+        (
+            "notification_put",
+            (
+                NotificationPreferences(
+                    budget_80_enabled=True,
+                    budget_100_enabled=False,
+                    recurring_ready_enabled=True,
+                    weekly_digest_enabled=True,
+                    quiet_start=time(22, 0),
+                    quiet_end=time(7, 0),
+                    weekly_weekday=4,
+                    weekly_time=time(18, 30),
+                ),
+                0,
+            ),
+        )
+    ]
+    assert all(response.status_code == 422 for response in rejected)
+    assert all(response.json()["error"]["code"] == "validation_failed" for response in rejected)
 
 
 @pytest.mark.parametrize(
@@ -561,6 +780,148 @@ async def test_mutation_boundary_enforces_security_headers_media_type_and_stream
         assert response.json()["error"]["code"] == "origin_forbidden"
     assert bad_key.status_code == 422
     assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_quick_draft_boundary_accepts_only_bounded_nonblank_text() -> None:
+    service = FakeMutationService()
+    valid_text = "x" * 4096
+
+    async with _client(_app(service)) as client:
+        accepted = await client.post(
+            "/api/v1/drafts/quick",
+            headers=_headers(),
+            json={"text": valid_text},
+        )
+        rejected = [
+            await client.post(
+                "/api/v1/drafts/quick",
+                headers=_headers(),
+                json=body,
+            )
+            for body in (
+                {"text": ""},
+                {"text": " \t\n"},
+                {"text": "x" * 4097},
+                {"text": 500},
+                {"text": "500", "extra": True},
+            )
+        ]
+        duplicate = await client.post(
+            "/api/v1/drafts/quick",
+            headers={**_headers(), "Content-Type": "application/json"},
+            content=b'{"text":"500","text":"600"}',
+        )
+        missing_csrf_headers = _headers()
+        missing_csrf_headers.pop("X-CSRF-Token")
+        missing_csrf = await client.post(
+            "/api/v1/drafts/quick",
+            headers=missing_csrf_headers,
+            json={"text": "500"},
+        )
+
+    assert accepted.status_code == 201
+    assert accepted.json()["result"]["kind"] == "draft"
+    assert all(response.status_code == 422 for response in (*rejected, duplicate))
+    assert all(
+        response.json()["error"]["code"] == "validation_failed"
+        for response in (*rejected, duplicate)
+    )
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["error"]["code"] == "csrf_failed"
+    assert service.calls == [("quick", valid_text)]
+
+
+@pytest.mark.asyncio
+async def test_compose_draft_boundary_is_strict_decimal_and_versioned() -> None:
+    service = FakeMutationService()
+    valid_body = {
+        "type": "expense",
+        "amount": "500.50",
+        "account": {"kind": "existing", "id": str(ACCOUNT_ID), "version": 3},
+        "category": {"kind": "existing", "id": str(CATEGORY_ID), "version": 4},
+        "occurred_on": "2026-08-20",
+        "description": "synthetic",
+    }
+
+    async with _client(_app(service)) as client:
+        accepted = await client.post(
+            "/api/v1/drafts/compose",
+            headers=_headers(),
+            json=valid_body,
+        )
+        rejected = [
+            await client.post(
+                "/api/v1/drafts/compose",
+                headers=_headers(),
+                json={"type": "expense", "amount": amount},
+            )
+            for amount in (
+                500.5,
+                "0",
+                "0500",
+                "+500",
+                "-500",
+                "500,50",
+                "5e2",
+                "500.500",
+                "99999999999999999.99",
+            )
+        ]
+        rejected.extend(
+            [
+                await client.post(
+                    "/api/v1/drafts/compose",
+                    headers=_headers(),
+                    json={**valid_body, "extra": True},
+                ),
+                await client.post(
+                    "/api/v1/drafts/compose",
+                    headers=_headers(),
+                    json={
+                        "type": "expense",
+                        "amount": "500",
+                        "account": {"id": str(ACCOUNT_ID), "version": 3},
+                    },
+                ),
+                await client.post(
+                    "/api/v1/drafts/compose",
+                    headers=_headers(),
+                    json={
+                        "type": "expense",
+                        "amount": "500",
+                        "occurred_on": "2026-08-20T10:00:00",
+                    },
+                ),
+                await client.post(
+                    "/api/v1/drafts/compose",
+                    headers=_headers(),
+                    json={
+                        "type": "expense",
+                        "amount": "500",
+                        "description": "x" * 501,
+                    },
+                ),
+            ]
+        )
+
+    assert accepted.status_code == 201
+    assert accepted.json()["result"]["kind"] == "draft"
+    assert all(response.status_code == 422 for response in rejected)
+    assert all(response.json()["error"]["code"] == "validation_failed" for response in rejected)
+    assert service.calls == [
+        (
+            "compose",
+            ComposeDraftSpec(
+                TransactionType.EXPENSE,
+                50_050,
+                DraftCatalogRef(ACCOUNT_ID, 3),
+                DraftCatalogRef(CATEGORY_ID, 4),
+                date(2026, 8, 20),
+                "synthetic",
+            ),
+        )
+    ]
 
 
 @pytest.mark.parametrize("origin", [None, "https://web.telegram.org"])
@@ -777,6 +1138,23 @@ def test_draft_projection_never_exposes_raw_or_pending_contents() -> None:
     assert PENDING_DRAFT_INTENT_KEY not in serialized
     assert "payload" not in serialized
 
+    payload[PENDING_DRAFT_INTENT_KEY] = encode_pending_draft_intent(
+        PendingComposeIntent(
+            ComposedDraftInput(
+                TransactionType.EXPENSE,
+                98_765,
+                NOW,
+                description=marker,
+            )
+        )
+    )
+    composed = draft_response(project_public_draft(_draft(payload=payload)))
+    composed_serialized = composed.model_dump_json()
+    assert composed.conflict is not None
+    assert composed.conflict.pending_kind == "compose"
+    assert marker not in composed_serialized
+    assert "98765" not in composed_serialized
+
 
 @pytest.mark.parametrize(
     ("state", "payload"),
@@ -816,6 +1194,9 @@ class _NoDomainMutation:
     async def begin_wizard(self, *_args: object) -> object:
         raise AssertionError("future draft must not stage wizard intent")
 
+    async def begin_quick(self, *_args: object) -> object:
+        raise AssertionError("future draft must not stage quick intent")
+
     async def begin_repeat(self, *_args: object) -> object:
         raise AssertionError("future draft must not stage repeat intent")
 
@@ -842,6 +1223,8 @@ async def test_future_draft_schema_is_unsupported_and_all_task14_writes_fail_clo
     assert public.transaction is None
     operations = (
         commands.create_draft(OWNER_ID),
+        commands.begin_quick_draft(OWNER_ID, "500 synthetic"),
+        commands.compose_draft(ComposeDraftSpec(TransactionType.EXPENSE, 50_000).bind(OWNER_ID)),
         commands.patch_draft(
             DraftPatchSpec(DraftRef(DRAFT_ID, 4), DraftPatchAction.BACK).bind(OWNER_ID)
         ),
@@ -867,7 +1250,11 @@ async def test_mutation_openapi_is_closed_authenticated_and_has_no_dangling_refs
 
     paths = schema["paths"]
     mutation_paths = {
+        "/api/v1/settings/notifications",
+        "/api/v1/settings/timezone",
         "/api/v1/drafts",
+        "/api/v1/drafts/quick",
+        "/api/v1/drafts/compose",
         "/api/v1/drafts/{draft_id}",
         "/api/v1/drafts/{draft_id}/confirm",
         "/api/v1/drafts/{draft_id}/cancel",
@@ -879,7 +1266,42 @@ async def test_mutation_openapi_is_closed_authenticated_and_has_no_dangling_refs
         "/api/v1/transactions/{transaction_id}/restore",
     }
     assert mutation_paths.issubset(paths)
+    timezone_schema = paths["/api/v1/settings/timezone"]["put"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert timezone_schema["additionalProperties"] is False
+    assert timezone_schema["required"] == ["timezone", "version"]
+    assert timezone_schema["properties"]["timezone"]["maxLength"] == 64
+    assert timezone_schema["properties"]["version"]["type"] == "integer"
+    notifications_schema = paths["/api/v1/settings/notifications"]["put"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert notifications_schema["additionalProperties"] is False
+    assert notifications_schema["required"] == [
+        "budget_80_enabled",
+        "budget_100_enabled",
+        "recurring_ready_enabled",
+        "weekly_digest_enabled",
+        "quiet_start",
+        "quiet_end",
+        "weekly_weekday",
+        "weekly_time",
+        "version",
+    ]
+    assert notifications_schema["properties"]["weekly_weekday"] == {
+        "maximum": 6,
+        "minimum": 0,
+        "title": "Weekly Weekday",
+        "type": "integer",
+    }
+    assert notifications_schema["properties"]["weekly_time"]["pattern"] == (
+        r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+    )
+    assert notifications_schema["properties"]["version"]["maximum"] == 2**31 - 1
+    assert set(paths["/api/v1/settings/notifications"]) >= {"get", "put"}
     assert set(paths["/api/v1/drafts"]["post"]["responses"]) >= {"200", "201"}
+    assert set(paths["/api/v1/drafts/quick"]["post"]["responses"]) >= {"200", "201"}
+    assert set(paths["/api/v1/drafts/compose"]["post"]["responses"]) >= {"200", "201"}
     assert set(paths["/api/v1/drafts/{draft_id}"]["patch"]["responses"]) >= {
         "200",
         "204",
@@ -887,6 +1309,28 @@ async def test_mutation_openapi_is_closed_authenticated_and_has_no_dangling_refs
     assert set(paths["/api/v1/drafts/{draft_id}/confirm"]["post"]["responses"]) >= {"201"}
     assert "200" not in paths["/api/v1/drafts/{draft_id}/confirm"]["post"]["responses"]
     assert "post" not in paths.get("/api/v1/transactions", {})
+    quick_schema = paths["/api/v1/drafts/quick"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert quick_schema["additionalProperties"] is False
+    assert quick_schema["required"] == ["text"]
+    assert quick_schema["properties"]["text"] == {
+        "maxLength": 4096,
+        "minLength": 1,
+        "pattern": r"\S",
+        "title": "Text",
+        "type": "string",
+    }
+    compose_schema = paths["/api/v1/drafts/compose"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert compose_schema["additionalProperties"] is False
+    assert compose_schema["required"] == ["type", "amount"]
+    assert compose_schema["properties"]["amount"]["type"] == "string"
+    assert compose_schema["properties"]["amount"]["pattern"] == (
+        r"^(?:0|[1-9][0-9]{0,16})(?:\.[0-9]{1,2})?$"
+    )
+    assert "$defs" not in json.dumps(compose_schema)
     patch_schema = paths["/api/v1/drafts/{draft_id}"]["patch"]["requestBody"]["content"][
         "application/json"
     ]["schema"]
@@ -908,7 +1352,7 @@ async def test_mutation_openapi_is_closed_authenticated_and_has_no_dangling_refs
     assert "string" in json.dumps(amount)
     for path in mutation_paths:
         for method, operation in paths[path].items():
-            if method not in {"post", "patch"}:
+            if method not in {"post", "patch", "put"}:
                 continue
             assert operation["security"] == [{"SessionCookie": []}]
             header_parameters = [item for item in operation["parameters"] if item["in"] == "header"]
@@ -953,19 +1397,30 @@ async def test_mutation_logs_exclude_body_key_ids_revisions_and_results() -> Non
     root.setLevel(logging.INFO)
     try:
         async with _client(_app(service)) as client:
-            response = await client.patch(
-                f"/api/v1/drafts/{DRAFT_ID}",
+            response = await client.post(
+                "/api/v1/drafts/quick",
                 headers=_headers(),
-                json={"revision": 4, "action": "input_text", "text": marker},
+                json={"text": marker},
+            )
+            composed = await client.post(
+                "/api/v1/drafts/compose",
+                headers=_headers(),
+                json={
+                    "type": "expense",
+                    "amount": "987654321.12",
+                    "description": marker,
+                },
             )
     finally:
         root.handlers[:] = original_handlers
         root.setLevel(original_level)
 
-    assert response.status_code == 200
+    assert response.status_code == 201
+    assert composed.status_code == 201
     rendered = stream.getvalue()
     for sensitive in (
         marker,
+        "987654321",
         IDEMPOTENCY_KEY,
         SESSION_TOKEN,
         CSRF_TOKEN,

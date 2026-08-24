@@ -4,6 +4,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from finbot.application.dto import (
+    EMPTY_TRANSACTION_LIST_FILTERS,
     AccountSnapshot,
     CategorySnapshot,
     CategoryTotalSnapshot,
@@ -16,6 +17,7 @@ from finbot.application.dto import (
     TimeSeriesGrain,
     TransactionCursor,
     TransactionCursorItem,
+    TransactionListFilters,
     TransactionSnapshot,
 )
 from finbot.domain.transactions import TransactionType
@@ -101,6 +103,7 @@ class InMemoryQueryRepository:
         *,
         cursor: TransactionCursor | None,
         limit: int,
+        filters: TransactionListFilters = EMPTY_TRANSACTION_LIST_FILTERS,
     ) -> tuple[TransactionCursorItem, ...]:
         matching = sorted(
             (
@@ -113,6 +116,12 @@ class InMemoryQueryRepository:
                 )
                 for transaction in self._transactions.get(owner_id, ())
                 if transaction.deleted_at is None
+                and (filters.start is None or transaction.occurred_at >= filters.start)
+                and (filters.end is None or transaction.occurred_at < filters.end)
+                and (filters.kind is None or transaction.kind is filters.kind)
+                and (filters.account_id is None or transaction.account_id == filters.account_id)
+                and (filters.category_id is None or transaction.category_id == filters.category_id)
+                and (filters.currency is None or transaction.currency == filters.currency)
             ),
             key=lambda item: (
                 item.cursor.occurred_at,

@@ -309,6 +309,33 @@ Schedule payload, name, amount, currency, description, owner/catalog/draft/trans
 существующий confirm review-draft; уникальные owner-composite FK и `recurring_instance_id` сохраняют provenance.
 Удаление draft очищает только ссылку `draft_id`, поэтому instance остаётся аудируемым как dismissed.
 
+## Notification jobs и privacy boundary
+
+Уведомления выключены по умолчанию и включаются каждым owner отдельно. `notification-scheduler`
+получает только runtime database URL и независимый 32-byte `NOTIFICATION_SECURITY_KEY`; Telegram token,
+HTTP/BANK keys и public network ему не доступны. `notification-delivery` получает runtime DB, bot token и полный
+allowlist, но не получает notification/HTTP/BANK keys. Оба процесса non-root, read-only, cap-drop и ограничены
+своими Compose networks.
+
+Queue row содержит только owner UUID, фиксированный event kind, opaque owner-owned reference UUID,
+доменно разделённый keyed 32-byte dedupe digest, state/attempt/lease и timestamps. Суммы, валюты, названия,
+описания, текст Telegram message и сырой dedupe material не пересекают границу persistence/logging.
+Доставщик выбирает текст из закрытого static mapping в коде.
+
+Перед каждым Telegram I/O доставщик повторно проверяет current allowlist, exact private
+`telegram_user_id == telegram_chat_id`, текущий opt-in для event kind, quiet hours и принадлежность
+budget/recurring reference тому же owner. Для budget jobs он заново рассчитывает authoritative progress и
+отправляет alert только пока его точный порог 80/100% остаётся актуальным. Revoked, disabled, stale-threshold и
+cross-owner jobs завершаются без сети.
+Retry ограничен пятью попытками, exponential delay ограничен 15 минутами, lease recovery не
+даёт потерять crash-interrupted job. Как и любая at-least-once Telegram delivery, crash после успешного
+network acceptance, но до `delivered_at`, может дать один дубликат; транзакцию БД нельзя держать во время
+внешнего network call.
+
+Terminal `delivered`/`failed` jobs удаляются отдельным advisory-singleton cleanup не ранее 400 дней и не более
+500 строк за tick. Такой horizon длиннее максимального budget period и сохраняет dedupe; `pending` и leased rows
+cleanup не затрагивает.
+
 ## Secrets и PostgreSQL
 
 Локально secrets приходят из environment/`.env`; production получает их из файлов в `/run/secrets`. Каталог
@@ -364,7 +391,10 @@ reader запрашивает 513 и fail closed при legacy overflow. Нов�
 только после согласованного restart `bot` и `api`; затем bot отклоняет updates, а API отклоняет даже ещё не истёкшую
 session. Данные пользователя, audit trail и расписания не удаляются. `recurring-runner` не получает Telegram allowlist
 и продолжает создавать review drafts для активных schedules, поэтому до отзыва доступа operator должен pause-нуть
-их либо остановить runner. Destructive offboarding в текущем scope отсутствует.
+их либо остановить runner. Notification delivery сразу fail closed отклоняет jobs удалённого из allowlist
+owner, но DB-only scheduler продолжит создавать терминально отклоняемые jobs, пока opt-in не выключен.
+Перед offboarding отключите notification preferences или остановите scheduler. Destructive offboarding в текущем
+scope отсутствует.
 
 Безопасный rollout/rollback начинается в singleton-режиме с пустым `TELEGRAM_ALLOWED_USER_IDS`. После проверки
 основного пользователя operator задаёт полный canonical список, включающий `OWNER_TELEGRAM_USER_ID`, и одновременно

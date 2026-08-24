@@ -17,13 +17,20 @@ from finbot.adapters.database.repositories.http_idempotency import (
 from finbot.adapters.http.auth.crypto import HttpSecurityDigester
 from finbot.adapters.http.auth.service import SessionAuthenticator, SessionCredentials
 from finbot.adapters.http.mutations.ports import MutationUnitOfWork, MutationUnitOfWorkFactory
+from finbot.application.draft_composition import ComposeDraftSpec
 from finbot.application.dto import DraftRef, DraftSnapshot
-from finbot.application.errors import EntityNotFoundError
+from finbot.application.errors import ApplicationValidationError, EntityNotFoundError
+from finbot.application.notifications import (
+    NotificationPreferencesSnapshot,
+    ReplaceNotificationPreferences,
+)
 from finbot.application.revision_mutations import (
     DraftExistingSelection,
     DraftPatchResult,
     DraftPatchSpec,
 )
+from finbot.application.settings_mutations import ChangeTimezoneCommand
+from finbot.domain.notifications import NotificationPreferences
 
 IDEMPOTENCY_TTL = timedelta(hours=24)
 
@@ -57,6 +64,8 @@ class MutationOperation(StrEnum):
     BANK_IMPORT_SKIP = "bank_import.skip"
     BANK_IMPORT_CANCEL = "bank_import.cancel"
     DRAFT_CREATE = "draft.create"
+    DRAFT_QUICK = "draft.quick"
+    DRAFT_COMPOSE = "draft.compose"
     DRAFT_UPDATE = "draft.update"
     DRAFT_CONFIRM = "draft.confirm"
     DRAFT_CANCEL = "draft.cancel"
@@ -66,6 +75,8 @@ class MutationOperation(StrEnum):
     TRANSACTION_EDIT_DRAFT = "transaction.edit_draft"
     TRANSACTION_DELETE = "transaction.delete"
     TRANSACTION_RESTORE = "transaction.restore"
+    SETTINGS_TIMEZONE = "settings.timezone"
+    NOTIFICATION_PREFERENCES_REPLACE = "notification_preferences.replace"
 
 
 class IdempotencyKeyReuseError(RuntimeError):
@@ -265,6 +276,23 @@ class HttpMutationExecutor:
             raise EntityNotFoundError("Черновик не найден")
         return current
 
+    async def notification_preferences(
+        self,
+        credentials: SessionCredentials,
+    ) -> NotificationPreferencesSnapshot:
+        now = self._now()
+        async with self._uow_factory() as uow:
+            authenticated = await self._authenticator.authenticate_read(
+                uow.auth,
+                credentials,
+                now=now,
+            )
+            owner_id = authenticated.owner.owner_id
+            snapshot = await uow.notifications.get(owner_id)
+            if snapshot.owner_id != owner_id:
+                raise InvalidStoredMutationResultError
+            return snapshot
+
 
 _DRAFT_CREATE_RESULTS = frozenset(
     {
@@ -324,6 +352,51 @@ def _patch_semantics(spec: DraftPatchSpec) -> dict[str, object]:
     return semantic
 
 
+def _compose_semantics(spec: ComposeDraftSpec) -> dict[str, object]:
+    semantic: dict[str, object] = {
+        "type": spec.kind.value,
+        "amount_minor": str(spec.amount_minor),
+        "occurred_on": spec.occurred_on.isoformat() if spec.occurred_on is not None else None,
+        "description": spec.description,
+    }
+    if spec.account is not None:
+        semantic["account"] = {
+            "id": str(spec.account.entity_id),
+            "version": spec.account.version,
+        }
+    if spec.category is not None:
+        semantic["category"] = {
+            "id": str(spec.category.entity_id),
+            "version": spec.category.version,
+        }
+    return semantic
+
+
+def _notification_preferences_semantics(
+    preferences: NotificationPreferences,
+    version: int,
+) -> dict[str, object]:
+    return {
+        "budget_80_enabled": preferences.budget_80_enabled,
+        "budget_100_enabled": preferences.budget_100_enabled,
+        "quiet_end": (
+            preferences.quiet_end.isoformat(timespec="minutes")
+            if preferences.quiet_end is not None
+            else None
+        ),
+        "quiet_start": (
+            preferences.quiet_start.isoformat(timespec="minutes")
+            if preferences.quiet_start is not None
+            else None
+        ),
+        "recurring_ready_enabled": preferences.recurring_ready_enabled,
+        "version": version,
+        "weekly_digest_enabled": preferences.weekly_digest_enabled,
+        "weekly_time": preferences.weekly_time.isoformat(timespec="minutes"),
+        "weekly_weekday": preferences.weekly_weekday,
+    }
+
+
 class HttpRevisionMutationService:
     """Closed Task 14 facade; routes cannot invoke generic domain mutations."""
 
@@ -338,6 +411,12 @@ class HttpRevisionMutationService:
     async def draft(self, credentials: SessionCredentials, draft_id: UUID) -> DraftSnapshot:
         return await self._executor.draft(credentials, draft_id)
 
+    async def notification_preferences(
+        self,
+        credentials: SessionCredentials,
+    ) -> NotificationPreferencesSnapshot:
+        return await self._executor.notification_preferences(credentials)
+
     async def create_draft(self, credentials: MutationCredentials) -> MutationReceipt:
         async def mutate(uow: MutationUnitOfWork, owner_id: UUID) -> MutationReceipt:
             status, draft = await uow.commands.create_draft(owner_id)
@@ -347,6 +426,87 @@ class HttpRevisionMutationService:
             credentials,
             operation=MutationOperation.DRAFT_CREATE,
             semantic_request={},
+            allowed_results=_DRAFT_CREATE_RESULTS,
+            mutate=mutate,
+        )
+
+    async def change_timezone(
+        self,
+        credentials: MutationCredentials,
+        timezone: str,
+        version: int,
+    ) -> MutationReceipt:
+        async def mutate(uow: MutationUnitOfWork, owner_id: UUID) -> MutationReceipt:
+            await uow.settings.execute(ChangeTimezoneCommand(owner_id, version, timezone))
+            return MutationReceipt(204, IdempotencyResultKind.NONE)
+
+        return await self._executor.execute(
+            credentials,
+            operation=MutationOperation.SETTINGS_TIMEZONE,
+            semantic_request={"timezone": timezone, "version": version},
+            allowed_results=_NONE_RESULTS,
+            mutate=mutate,
+        )
+
+    async def replace_notification_preferences(
+        self,
+        credentials: MutationCredentials,
+        preferences: NotificationPreferences,
+        version: int,
+    ) -> MutationReceipt:
+        async def mutate(uow: MutationUnitOfWork, owner_id: UUID) -> MutationReceipt:
+            if version >= 2**31 - 1:
+                raise ApplicationValidationError("Достигнут предел версий настроек уведомлений")
+            snapshot = await uow.notifications.replace(
+                ReplaceNotificationPreferences(owner_id, version, preferences)
+            )
+            expected_version = 1 if version == 0 else version + 1
+            if (
+                snapshot.owner_id != owner_id
+                or snapshot.preferences != preferences
+                or snapshot.version != expected_version
+            ):
+                raise InvalidStoredMutationResultError
+            return MutationReceipt(204, IdempotencyResultKind.NONE)
+
+        return await self._executor.execute(
+            credentials,
+            operation=MutationOperation.NOTIFICATION_PREFERENCES_REPLACE,
+            semantic_request=_notification_preferences_semantics(preferences, version),
+            allowed_results=_NONE_RESULTS,
+            mutate=mutate,
+        )
+
+    async def begin_quick_draft(
+        self,
+        credentials: MutationCredentials,
+        text: str,
+    ) -> MutationReceipt:
+        async def mutate(uow: MutationUnitOfWork, owner_id: UUID) -> MutationReceipt:
+            status, draft = await uow.commands.begin_quick_draft(owner_id, text)
+            return _draft_receipt(status, draft)
+
+        return await self._executor.execute(
+            credentials,
+            operation=MutationOperation.DRAFT_QUICK,
+            semantic_request={"text": text},
+            allowed_results=_DRAFT_CREATE_RESULTS,
+            mutate=mutate,
+        )
+
+    async def compose_draft(
+        self,
+        credentials: MutationCredentials,
+        spec: ComposeDraftSpec,
+    ) -> MutationReceipt:
+        async def mutate(uow: MutationUnitOfWork, owner_id: UUID) -> MutationReceipt:
+            status, draft = await uow.commands.compose_draft(spec.bind(owner_id))
+            return _draft_receipt(status, draft)
+
+        return await self._executor.execute(
+            credentials,
+            operation=MutationOperation.DRAFT_COMPOSE,
+            semantic_request=_compose_semantics(spec),
             allowed_results=_DRAFT_CREATE_RESULTS,
             mutate=mutate,
         )

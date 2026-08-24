@@ -8,11 +8,19 @@ from finbot.adapters.http.finance.cursor import (
     InvalidTransactionCursorError,
     TransactionCursorCodec,
 )
-from finbot.application.dto import DeletedTransactionCursor, TransactionCursor
+from finbot.application.dto import (
+    DeletedTransactionCursor,
+    TransactionCursor,
+    TransactionListFilters,
+)
+from finbot.domain.transactions import TransactionType
 
 KEY = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA"
 OWNER_ID = UUID("018f0000-0000-7000-8000-000000000001")
 OTHER_OWNER_ID = UUID("018f0000-0000-7000-8000-000000000002")
+LEGACY_ACTIVE_CURSOR = (
+    "AQAGWOrsa9ZOAY8AAAAAcACAAAAAAAAAAyK26PL3KlDmVqE8KmRnZ_Abvq3igSB7Ug13aFzrpONV"
+)
 
 
 def _cursor() -> TransactionCursor:
@@ -49,6 +57,65 @@ def test_active_and_deleted_cursor_domains_are_not_interchangeable() -> None:
         codec.decode_deleted(OWNER_ID, active)
     with pytest.raises(InvalidTransactionCursorError):
         codec.decode(OWNER_ID, deleted)
+
+
+def test_active_cursor_is_bound_to_canonical_filter_fingerprint() -> None:
+    codec = TransactionCursorCodec(KEY)
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    account_id = UUID("018f0000-0000-7000-8000-000000000004")
+    filters = TransactionListFilters(
+        start=start,
+        end=datetime(2026, 9, 1, tzinfo=UTC),
+        kind=TransactionType.EXPENSE,
+        account_id=account_id,
+        currency="RUB",
+    )
+    equivalent = TransactionListFilters(
+        currency="RUB",
+        account_id=account_id,
+        kind=TransactionType.EXPENSE,
+        end=datetime(2026, 9, 1, tzinfo=UTC),
+        start=start,
+    )
+    encoded = codec.encode(OWNER_ID, _cursor(), filters=filters)
+
+    assert len(encoded) == 76
+    assert codec.decode(OWNER_ID, encoded, filters=equivalent) == _cursor()
+    for other_filters in (
+        None,
+        TransactionListFilters(
+            start=start,
+            end=datetime(2026, 9, 1, tzinfo=UTC),
+            kind=TransactionType.INCOME,
+            account_id=account_id,
+            currency="RUB",
+        ),
+        TransactionListFilters(
+            start=start,
+            end=datetime(2026, 9, 1, tzinfo=UTC),
+            kind=TransactionType.EXPENSE,
+            account_id=account_id,
+            currency="USD",
+        ),
+    ):
+        with pytest.raises(InvalidTransactionCursorError):
+            codec.decode(OWNER_ID, encoded, filters=other_filters)
+
+
+def test_empty_filters_preserve_unfiltered_cursor_compatibility() -> None:
+    codec = TransactionCursorCodec(KEY)
+    legacy = codec.encode(OWNER_ID, _cursor())
+
+    assert legacy == LEGACY_ACTIVE_CURSOR
+    assert codec.encode(OWNER_ID, _cursor(), filters=TransactionListFilters()) == legacy
+    assert (
+        codec.decode(
+            OWNER_ID,
+            legacy,
+            filters=TransactionListFilters(),
+        )
+        == _cursor()
+    )
 
 
 @pytest.mark.parametrize(

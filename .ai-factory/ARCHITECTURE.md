@@ -33,6 +33,7 @@ src/finbot/
 │   ├── ocr_queue.py                # Channel-neutral sequential OCR queue codec
 │   ├── export.py                   # Bounded privacy-safe CSV export contracts
 │   ├── draft_preparation.py        # Canonical prepared-draft contracts
+│   ├── notifications.py            # Tenant-owned preference/job contracts
 │   ├── rules.py                    # Category-rule ports and policies
 │   ├── queries/                    # Persistence-neutral read contracts
 │   ├── services/                   # Compatibility commands and pure services
@@ -73,6 +74,8 @@ src/finbot/
 ├── observability/logging.py        # Privacy-safe allowlisted JSON logging
 ├── config.py                       # Validated env/Docker-secret adapter
 ├── bootstrap.py                    # Composition root and focused-router registration
+├── notification_scheduler.py       # DB-only bounded notification producer process
+├── notification_delivery.py        # Allowlist-rechecked Telegram delivery process
 ├── healthcheck.py                  # Safe operational probe
 └── __main__.py                     # Process entry point
 
@@ -201,6 +204,23 @@ The architecture test in `tests/unit/test_architecture.py` is a required enforce
    pending with backoff; hidden intents, suspension, replacement and transaction auto-save are forbidden.
 5. Existing draft confirmation writes `source=recurring` plus unique `recurring_instance_id`. Draft cancellation
    clears the FK and derives `dismissed`; schedule/instance reads remain bounded and owner-scoped.
+
+### Quick capture and notification flow
+
+1. Strict amount-only classification runs before the legacy quick parser but produces the same `flow=quick`
+   persistent draft and existing optimistic/outbox/conflict contracts. Telegram and HTTP/Mini App continue one
+   channel-neutral draft; no transaction exists before explicit review confirmation.
+2. HTTP quick/compose mutations retain session binding, CSRF, idempotency, owner locking and typed receipts.
+   Transaction filters remain owner-scoped and signed cursors are bound to an exact filter fingerprint.
+3. Budget progress is integer-only and currency-local. It returns actual spend, known recurring commitments,
+   remaining/overspent, safe daily spend, a commitment-only forecast and a closed `on_track/watch/over` state.
+4. `notification_scheduler` receives only runtime DB access plus its independent keyed-dedupe secret. It pages owners
+   fairly and persists privacy-safe job metadata without Telegram credentials or financial/message payloads.
+5. `notification_delivery` receives runtime DB, bot token and the full allowlist but not the dedupe key. Before every
+   network call it rechecks allowlist/private chat, opt-in, quiet hours, reference ownership and the authoritative
+   current budget threshold. Delivery is leased and bounded to five attempts.
+6. A separate advisory-singleton cleanup deletes at most 500 terminal `delivered`/`failed` jobs older than 400 days;
+   it never removes pending or leased work and retains dedupe longer than the maximum budget horizon.
 
 ### Query and reporting flow
 

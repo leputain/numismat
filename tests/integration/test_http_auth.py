@@ -101,7 +101,12 @@ def _client(app: FastAPI) -> httpx2.AsyncClient:
     )
 
 
-async def _create_owner(factory: async_sessionmaker, telegram_user_id: int) -> User:
+async def _create_owner(
+    factory: async_sessionmaker,
+    telegram_user_id: int,
+    *,
+    settings_version: int = 1,
+) -> User:
     async with factory.begin() as session:
         owner = User(
             telegram_user_id=telegram_user_id,
@@ -109,6 +114,7 @@ async def _create_owner(factory: async_sessionmaker, telegram_user_id: int) -> U
             locale="ru_RU",
             timezone="Europe/Moscow",
             base_currency="RUB",
+            settings_version=settings_version,
         )
         session.add(owner)
         await session.flush()
@@ -125,7 +131,7 @@ async def test_http_auth_persists_only_keyed_state_and_enforces_session_lifecycl
     engine = create_async_engine(DATABASE_URL)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     telegram_user_id = 99_712_101
-    owner = await _create_owner(factory, telegram_user_id)
+    owner = await _create_owner(factory, telegram_user_id, settings_version=9)
     clock = MutableClock(NOW)
     session_token = _token(11)
     csrf_token = _token(12)
@@ -163,6 +169,8 @@ async def test_http_auth_persists_only_keyed_state_and_enforces_session_lifecycl
 
         assert login.status_code == 200
         assert me.status_code == 200
+        assert login.json()["settings_version"] == 9
+        assert me.json()["settings_version"] == 9
         assert logout.status_code == 204
         assert logout.headers.get_list("set-cookie") == []
         assert after_logout.status_code == 401

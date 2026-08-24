@@ -20,7 +20,13 @@ from finbot.adapters.database.repositories.http_idempotency import (
 from finbot.adapters.database.repositories.http_mutation_commands import (
     SqlAlchemyRevisionMutationCommands,
 )
+from finbot.adapters.database.repositories.notifications import (
+    SqlAlchemyNotificationRepository,
+)
 from finbot.adapters.database.repositories.recurring import SqlAlchemyRecurringRepository
+from finbot.adapters.database.repositories.settings_mutations import (
+    SqlAlchemySettingsMutationRepository,
+)
 from finbot.adapters.http.auth.ports import AuthPersistence
 from finbot.adapters.http.mutations.ports import (
     CatalogMutationCommands,
@@ -33,7 +39,9 @@ from finbot.application.use_cases.bank_imports import BankImportUseCases
 from finbot.application.use_cases.budgets import BudgetUseCases
 from finbot.application.use_cases.catalogs import CatalogUseCases
 from finbot.application.use_cases.exchange_rates import ExchangeRateUseCases
+from finbot.application.use_cases.notifications import NotificationPreferencesUseCases
 from finbot.application.use_cases.recurring import RecurringUseCases
+from finbot.application.use_cases.settings_mutations import ChangeSettingsTimezone
 
 
 class SqlAlchemyHttpMutationUnitOfWork:
@@ -50,8 +58,10 @@ class SqlAlchemyHttpMutationUnitOfWork:
         "drafts",
         "exchange_rates",
         "idempotency",
+        "notifications",
         "owner_timezone",
         "recurring",
+        "settings",
         "session",
     )
 
@@ -67,8 +77,10 @@ class SqlAlchemyHttpMutationUnitOfWork:
         self.drafts: DraftRepository
         self.exchange_rates: ExchangeRateUseCases
         self.idempotency: MutationIdempotency
+        self.notifications: NotificationPreferencesUseCases
         self.owner_timezone: str
         self.recurring: RecurringUseCases
+        self.settings: ChangeSettingsTimezone
 
     async def __aenter__(self) -> SqlAlchemyHttpMutationUnitOfWork:
         self.session = await self._context.__aenter__()
@@ -83,7 +95,13 @@ class SqlAlchemyHttpMutationUnitOfWork:
                 SqlAlchemyExchangeRateRepository(self.session)
             )
             self.idempotency = SqlAlchemyHttpIdempotencyRepository(self.session)
+            self.notifications = NotificationPreferencesUseCases(
+                SqlAlchemyNotificationRepository(self.session)
+            )
             self.recurring = RecurringUseCases(SqlAlchemyRecurringRepository(self.session))
+            self.settings = ChangeSettingsTimezone(
+                SqlAlchemySettingsMutationRepository(self.session)
+            )
         except BaseException as exc:
             await self._context.__aexit__(type(exc), exc, exc.__traceback__)
             raise

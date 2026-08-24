@@ -42,6 +42,11 @@ class User(Base):
     timezone: Mapped[str] = mapped_column(String(64), default="Europe/Moscow")
     base_currency: Mapped[str] = mapped_column(String(3), default="RUB")
     fast_mode: Mapped[bool] = mapped_column(Boolean, default=True)
+    settings_version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default=text("1"),
+    )
     default_account_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -57,12 +62,164 @@ class User(Base):
             "telegram_chat_id IS NULL OR telegram_chat_id = telegram_user_id",
             name="users_private_telegram_chat_check",
         ),
+        CheckConstraint("settings_version >= 1", name="users_settings_version_check"),
         ForeignKeyConstraint(
             ["default_account_id", "id"],
             ["accounts.id", "accounts.user_id"],
             name="fk_users_default_account_owner",
             use_alter=True,
         ),
+    )
+
+
+class NotificationPreference(Base):
+    __tablename__ = "notification_preferences"
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    budget_80_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+    )
+    budget_100_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+    )
+    recurring_ready_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+    )
+    weekly_digest_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+    )
+    quiet_start: Mapped[time | None] = mapped_column(SqlTime(timezone=False))
+    quiet_end: Mapped[time | None] = mapped_column(SqlTime(timezone=False))
+    weekly_weekday: Mapped[int] = mapped_column(
+        SmallInteger,
+        default=0,
+        server_default=text("0"),
+    )
+    weekly_time: Mapped[time] = mapped_column(
+        SqlTime(timezone=False),
+        default=time(9, 0),
+        server_default=text("'09:00:00'"),
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "(quiet_start IS NULL) = (quiet_end IS NULL)",
+            name="notification_preferences_quiet_pair_check",
+        ),
+        CheckConstraint(
+            "quiet_start IS NULL OR quiet_start <> quiet_end",
+            name="notification_preferences_quiet_range_check",
+        ),
+        CheckConstraint(
+            "EXTRACT(SECOND FROM quiet_start) = 0 AND EXTRACT(SECOND FROM quiet_end) = 0",
+            name="notification_preferences_quiet_minute_check",
+        ),
+        CheckConstraint(
+            "weekly_weekday BETWEEN 0 AND 6",
+            name="notification_preferences_weekday_check",
+        ),
+        CheckConstraint(
+            "EXTRACT(SECOND FROM weekly_time) = 0",
+            name="notification_preferences_weekly_minute_check",
+        ),
+        CheckConstraint("version >= 1", name="notification_preferences_version_check"),
+    )
+
+
+class NotificationJob(Base):
+    __tablename__ = "notification_jobs"
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid7)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(32))
+    reference_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    dedupe_digest: Mapped[bytes] = mapped_column(LargeBinary, unique=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    attempt_count: Mapped[int] = mapped_column(
+        SmallInteger,
+        default=0,
+        server_default=text("0"),
+    )
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    lease_token: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_code: Mapped[str | None] = mapped_column(String(32))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('budget_80', 'budget_100', 'recurring_ready', 'weekly_digest')",
+            name="notification_jobs_kind_check",
+        ),
+        CheckConstraint(
+            "(kind = 'weekly_digest' AND reference_id IS NULL) OR "
+            "(kind <> 'weekly_digest' AND reference_id IS NOT NULL)",
+            name="notification_jobs_reference_check",
+        ),
+        CheckConstraint(
+            "octet_length(dedupe_digest) = 32",
+            name="notification_jobs_dedupe_digest_check",
+        ),
+        CheckConstraint(
+            "attempt_count BETWEEN 0 AND 5",
+            name="notification_jobs_attempt_count_check",
+        ),
+        CheckConstraint(
+            "failure_code IS NULL OR failure_code IN "
+            "('chat_invalid', 'owner_revoked', 'preference_disabled', "
+            "'reference_invalid', 'retry_exhausted', 'telegram_rejected', "
+            "'telegram_retryable')",
+            name="notification_jobs_failure_code_check",
+        ),
+        CheckConstraint(
+            "(lease_token IS NULL) = (lease_until IS NULL)",
+            name="notification_jobs_lease_pair_check",
+        ),
+        CheckConstraint(
+            "(status = 'pending' AND lease_token IS NULL AND delivered_at IS NULL "
+            "AND attempt_count < 5) OR "
+            "(status = 'leased' AND lease_token IS NOT NULL AND delivered_at IS NULL) OR "
+            "(status = 'delivered' AND lease_token IS NULL AND delivered_at IS NOT NULL "
+            "AND failure_code IS NULL) OR "
+            "(status = 'failed' AND lease_token IS NULL AND delivered_at IS NULL "
+            "AND failure_code IS NOT NULL)",
+            name="notification_jobs_state_check",
+        ),
+        Index(
+            "ix_notification_jobs_pending",
+            "available_at",
+            "id",
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index(
+            "ix_notification_jobs_lease",
+            "lease_until",
+            "id",
+            postgresql_where=text("status = 'leased'"),
+        ),
+        Index(
+            "ix_notification_jobs_terminal_cleanup",
+            "updated_at",
+            "id",
+            postgresql_where=text("status IN ('delivered', 'failed')"),
+        ),
+        Index("ix_notification_jobs_owner", "user_id", "created_at", "id"),
     )
 
 

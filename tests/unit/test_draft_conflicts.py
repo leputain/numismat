@@ -392,6 +392,31 @@ async def test_quick_replace_reparses_with_authoritative_shared_preparation() ->
 
 
 @pytest.mark.asyncio
+async def test_quick_replace_preserves_authoritative_amount_only_state() -> None:
+    quick = _QuickDrafts(
+        PreparedDraftResult(
+            DraftPreparationState.TYPE_REQUIRED,
+            {
+                "flow": "quick",
+                "input_mode": "amount_only",
+                "amount_minor": 50_000,
+            },
+        )
+    )
+    replacements = PrepareDraftConflictReplacement(quick, _Targets())
+
+    prepared = await replacements.prepare(OWNER_ID, PendingQuickIntent("500"))
+
+    assert quick.commands == [PrepareQuickDraftCommand(OWNER_ID, "500")]
+    assert prepared.state == "wizard_type"
+    assert dict(prepared.payload) == {
+        "flow": "quick",
+        "input_mode": "amount_only",
+        "amount_minor": 50_000,
+    }
+
+
+@pytest.mark.asyncio
 async def test_quick_replace_persists_only_the_reparsed_payload() -> None:
     repository = InMemoryDraftRepository()
     created = await DraftUseCases(repository).create(

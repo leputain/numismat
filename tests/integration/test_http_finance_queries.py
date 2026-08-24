@@ -235,6 +235,214 @@ async def test_http_finance_is_owner_scoped_keyset_bounded_and_currency_safe() -
 
 
 @pytest.mark.asyncio
+async def test_transaction_filters_are_owner_scoped_and_cursor_bound_in_postgresql() -> None:
+    engine = create_async_engine(DATABASE_URL)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    owner = await _create_owner(factory, telegram_user_id=99_713_105)
+    other_owner = await _create_owner(factory, telegram_user_id=99_713_106)
+    session_token = _token(61)
+    await _create_session(factory, owner, raw_session_token=session_token)
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    end = datetime(2026, 9, 1, tzinfo=UTC)
+    try:
+        async with factory.begin() as session:
+            account = Account(
+                user_id=owner.id,
+                name="Filter target account",
+                slug="filter-target-account",
+                currency="RUB",
+            )
+            other_account = Account(
+                user_id=owner.id,
+                name="Filter other account",
+                slug="filter-other-account",
+                currency="RUB",
+            )
+            expense_category = Category(
+                user_id=owner.id,
+                kind=TransactionType.EXPENSE.value,
+                name="Filter target category",
+                slug="filter-target-category",
+                emoji="▫️",
+            )
+            other_expense_category = Category(
+                user_id=owner.id,
+                kind=TransactionType.EXPENSE.value,
+                name="Filter other category",
+                slug="filter-other-category",
+                emoji="▫️",
+            )
+            income_category = Category(
+                user_id=owner.id,
+                kind=TransactionType.INCOME.value,
+                name="Filter income category",
+                slug="filter-income-category",
+                emoji="▫️",
+            )
+            foreign_account = Account(
+                user_id=other_owner.id,
+                name="Filter foreign account",
+                slug="filter-foreign-account",
+                currency="RUB",
+            )
+            foreign_category = Category(
+                user_id=other_owner.id,
+                kind=TransactionType.EXPENSE.value,
+                name="Filter foreign category",
+                slug="filter-foreign-category",
+                emoji="▫️",
+            )
+            session.add_all(
+                [
+                    account,
+                    other_account,
+                    expense_category,
+                    other_expense_category,
+                    income_category,
+                    foreign_account,
+                    foreign_category,
+                ]
+            )
+            await session.flush()
+
+            def owner_transaction(
+                *,
+                occurred_at: datetime,
+                kind: TransactionType = TransactionType.EXPENSE,
+                currency: str = "RUB",
+                account_id: UUID = account.id,
+                category_id: UUID = expense_category.id,
+                amount_minor: int = 101,
+                deleted_at: datetime | None = None,
+            ) -> Transaction:
+                return Transaction(
+                    user_id=owner.id,
+                    type=kind.value,
+                    amount_minor=amount_minor,
+                    currency=currency,
+                    account_id=account_id,
+                    category_id=category_id,
+                    occurred_at=occurred_at,
+                    description="",
+                    deleted_at=deleted_at,
+                )
+
+            matching = (
+                owner_transaction(
+                    occurred_at=start + timedelta(days=10),
+                    amount_minor=2**53 + 201,
+                ),
+                owner_transaction(
+                    occurred_at=start,
+                    amount_minor=2**53 + 202,
+                ),
+            )
+            excluded = (
+                owner_transaction(occurred_at=start - timedelta(seconds=1)),
+                owner_transaction(occurred_at=end),
+                owner_transaction(
+                    occurred_at=start + timedelta(days=1),
+                    kind=TransactionType.INCOME,
+                    category_id=income_category.id,
+                ),
+                owner_transaction(
+                    occurred_at=start + timedelta(days=1),
+                    account_id=other_account.id,
+                ),
+                owner_transaction(
+                    occurred_at=start + timedelta(days=1),
+                    category_id=other_expense_category.id,
+                ),
+                owner_transaction(
+                    occurred_at=start + timedelta(days=1),
+                    currency="USD",
+                ),
+            )
+            deleted = owner_transaction(
+                occurred_at=start + timedelta(days=1),
+                deleted_at=NOW,
+            )
+            foreign = Transaction(
+                user_id=other_owner.id,
+                type=TransactionType.EXPENSE.value,
+                amount_minor=303,
+                currency="RUB",
+                account_id=foreign_account.id,
+                category_id=foreign_category.id,
+                occurred_at=start + timedelta(days=5),
+                description="",
+            )
+            session.add_all([*matching, *excluded, deleted, foreign])
+            await session.flush()
+
+        filters = {
+            "start": "2026-08-01T00:00:00Z",
+            "end": "2026-09-01T00:00:00Z",
+            "type": "expense",
+            "account_id": str(account.id),
+            "category_id": str(expense_category.id),
+            "currency": "RUB",
+        }
+        equivalent_filters = {
+            **filters,
+            "start": "2026-08-01T00:00:00.000000Z",
+            "end": "2026-09-01T00:00:00.0Z",
+        }
+        app = _finance_app(factory)
+        async with httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url=ORIGIN,
+            cookies={"__Host-numismat_session": session_token},
+            headers={
+                "X-Session-Binding": HttpSecurityDigester(SECURITY_KEY).session_binding(
+                    session_token
+                )
+            },
+        ) as client:
+            first = await client.get(
+                "/api/v1/transactions",
+                params={**filters, "limit": "1"},
+            )
+            cursor = first.json()["next_cursor"]
+            second = await client.get(
+                "/api/v1/transactions",
+                params={**equivalent_filters, "limit": "1", "cursor": cursor},
+            )
+            changed_filter = await client.get(
+                "/api/v1/transactions",
+                params={**filters, "currency": "USD", "cursor": cursor},
+            )
+            removed_filters = await client.get(
+                "/api/v1/transactions",
+                params={"cursor": cursor},
+            )
+            unfiltered = await client.get("/api/v1/transactions")
+
+        assert first.status_code == 200
+        assert [item["id"] for item in first.json()["items"]] == [str(matching[0].id)]
+        assert first.json()["items"][0]["amount_minor"] == str(matching[0].amount_minor)
+        assert isinstance(cursor, str) and len(cursor) == 76 and "=" not in cursor
+        assert second.status_code == 200
+        assert [item["id"] for item in second.json()["items"]] == [str(matching[1].id)]
+        assert second.json()["next_cursor"] is None
+        for rejected in (changed_filter, removed_filters):
+            assert rejected.status_code == 422
+            assert rejected.json()["error"]["code"] == "invalid_cursor"
+        assert unfiltered.status_code == 200
+        unfiltered_ids = {item["id"] for item in unfiltered.json()["items"]}
+        assert len(unfiltered_ids) == len(matching) + len(excluded)
+        assert str(foreign.id) not in unfiltered_ids
+        assert str(deleted.id) not in unfiltered_ids
+        assert all(
+            response.headers["cache-control"] == "no-store, no-cache"
+            for response in (first, second, changed_filter, removed_filters, unfiltered)
+        )
+    finally:
+        await _delete_owners(factory, owner, other_owner)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_finance_uow_is_repeatable_read_read_only_and_authenticates_first() -> None:
     engine = create_async_engine(DATABASE_URL)
     factory = async_sessionmaker(engine, expire_on_commit=False)

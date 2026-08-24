@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 
 import { apiClient } from "../../app/providers";
 import type {
@@ -19,6 +19,10 @@ import { PageHeading } from "../../shared/components/page-heading";
 import { isOptimisticConflict } from "../../shared/errors/user-message";
 import { emitClientEvent } from "../../shared/logging/client-events";
 import { usePreparedMutation } from "../../shared/mutations/prepared-mutation";
+import {
+  draftReturnDestination,
+  parseDraftReturn,
+} from "../../shared/navigation/draft-return";
 import {
   refreshDraftQueries,
   refreshFinanceQueries,
@@ -40,6 +44,7 @@ type DraftMutationKind =
 interface DraftMutationContext {
   readonly kind: DraftMutationKind;
   readonly catalog?: "accounts" | "categories";
+  readonly returnOnEmpty?: boolean;
 }
 
 const STATE_LABELS: Record<Draft["state"], string> = {
@@ -146,8 +151,10 @@ function DraftProgressGuide({ draft }: { readonly draft: Draft }) {
 export function DraftPage() {
   const auth = useAuth();
   const { locale, timeZone } = useSessionFormat();
+  const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const returnContext = parseDraftReturn(location.search);
   const [cancelDialog, setCancelDialog] = useState(false);
   const activeDraft = useQuery({
     queryKey: queryKeys.drafts.active,
@@ -174,7 +181,20 @@ export function DraftPage() {
       await refreshDraftQueries(queryClient);
       if (response?.result.kind === "transaction") {
         await refreshFinanceQueries(queryClient);
-        navigate(`/transactions/${response.result.transaction_id}`);
+        navigate(
+          returnContext === null
+            ? `/transactions/${response.result.transaction_id}`
+            : draftReturnDestination(returnContext),
+        );
+      } else if (context.kind === "cancel" && returnContext !== null) {
+        navigate(draftReturnDestination(returnContext));
+      } else if (
+        response === undefined &&
+        context.kind === "patch" &&
+        context.returnOnEmpty === true &&
+        returnContext !== null
+      ) {
+        navigate(draftReturnDestination(returnContext));
       }
     },
     onRejected: async (error) => {
@@ -244,7 +264,10 @@ export function DraftPage() {
       path: `/api/v1/drafts/${draft.id}`,
       body: action,
       method: "PATCH",
-      context: catalog === undefined ? { kind: "patch" } : { kind: "patch", catalog },
+      context:
+        catalog === undefined
+          ? { kind: "patch", returnOnEmpty: action.action === "back" }
+          : { kind: "patch", catalog, returnOnEmpty: action.action === "back" },
     });
   };
 

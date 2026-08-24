@@ -201,11 +201,12 @@ async def test_timezone_change_uses_cas_and_rolls_back_cleanly() -> None:
             ).execute(
                 ChangeTimezoneCommand(
                     fixture.owner_id,
-                    "Europe/Moscow",
+                    1,
                     "Asia/Yekaterinburg",
                 )
             )
             assert result.timezone == "Asia/Yekaterinburg"
+            assert result.settings_version == 2
             await session.rollback()
 
         async with factory() as verification:

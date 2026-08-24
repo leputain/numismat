@@ -53,7 +53,7 @@ def test_openapi_export_contains_finance_automation_surface_and_session_scheme()
     document = build_openapi_document()
     paths = document.get("paths")
     assert isinstance(paths, dict)
-    assert len(paths) == 63
+    assert len(paths) == 67
     expected_operations = {
         "/api/v1/accounts": {"get", "post"},
         "/api/v1/accounts/{account_id}": {"patch"},
@@ -90,11 +90,65 @@ def test_openapi_export_contains_finance_automation_surface_and_session_scheme()
         "/api/v1/bank-imports/{batch_id}/rows/{row_id}/skip": {"post"},
         "/api/v1/reports/today": {"get"},
         "/api/v1/reports/timeseries": {"get"},
+        "/api/v1/drafts/quick": {"post"},
+        "/api/v1/drafts/compose": {"post"},
+        "/api/v1/settings/notifications": {"get", "put"},
+        "/api/v1/settings/timezone": {"put"},
     }
     for path, methods in expected_operations.items():
         path_item = paths.get(path)
         assert isinstance(path_item, dict)
         assert methods <= path_item.keys()
+
+    compose = paths["/api/v1/drafts/compose"]["post"]
+    compose_schema = compose["requestBody"]["content"]["application/json"]["schema"]
+    assert compose_schema["additionalProperties"] is False
+    assert compose_schema["required"] == ["type", "amount"]
+    assert compose_schema["properties"]["amount"] == {
+        "maxLength": 20,
+        "minLength": 1,
+        "pattern": r"^(?:0|[1-9][0-9]{0,16})(?:\.[0-9]{1,2})?$",
+        "title": "Amount",
+        "type": "string",
+    }
+    assert compose_schema["properties"]["occurred_on"]["anyOf"][0]["pattern"] == (
+        r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    )
+    timezone_schema = paths["/api/v1/settings/timezone"]["put"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert timezone_schema["additionalProperties"] is False
+    assert timezone_schema["required"] == ["timezone", "version"]
+    assert timezone_schema["properties"]["timezone"]["maxLength"] == 64
+    notification_schema = paths["/api/v1/settings/notifications"]["put"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert notification_schema["additionalProperties"] is False
+    assert notification_schema["required"] == [
+        "budget_80_enabled",
+        "budget_100_enabled",
+        "recurring_ready_enabled",
+        "weekly_digest_enabled",
+        "quiet_start",
+        "quiet_end",
+        "weekly_weekday",
+        "weekly_time",
+        "version",
+    ]
+    assert notification_schema["properties"]["weekly_weekday"]["maximum"] == 6
+    assert notification_schema["properties"]["weekly_time"]["pattern"] == (
+        r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+    )
+    assert notification_schema["properties"]["version"]["maximum"] == 2**31 - 1
+    assert paths["/api/v1/settings/notifications"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"] == {"$ref": "#/components/schemas/NotificationPreferencesResponse"}
+    notification_response = document["components"]["schemas"]["NotificationPreferencesResponse"]
+    assert notification_response["additionalProperties"] is False
+    assert notification_response["required"] == notification_schema["required"]
+    assert notification_response["properties"]["quiet_start"]["anyOf"][1] == {"type": "null"}
+    auth_session = document["components"]["schemas"]["AuthSessionResponse"]
+    assert "settings_version" in auth_session["required"]
 
     components = document.get("components")
     assert isinstance(components, dict)
@@ -150,7 +204,7 @@ def test_every_protected_operation_declares_the_exact_session_binding_contract()
     # This count is deliberately exact: every current cookie-authenticated
     # operation must carry the page-scoped binding, including future additions
     # once the expected contract count is reviewed and updated.
-    assert protected_operations == 66
+    assert protected_operations == 71
     login = paths["/api/v1/auth/telegram"]["post"]
     assert login["responses"]["200"]["headers"][SESSION_BINDING_HEADER] == (
         SESSION_BINDING_OPENAPI_RESPONSE_HEADER

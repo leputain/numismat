@@ -135,6 +135,52 @@ services:
         target: database_url
     logging: {driver: local, options: {max-size: "10m", max-file: "5"}}
     networks: [data]
+  notification-scheduler:
+    build: .
+    command: ["python", "-m", "finbot.notification_scheduler"]
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:noexec,nosuid,nodev,size=16m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    pids_limit: 50
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      NOTIFICATION_SCHEDULER_INTERVAL_SECONDS: ${NOTIFICATION_SCHEDULER_INTERVAL_SECONDS:-60}
+    depends_on: {provision-runtime: {condition: service_completed_successfully}}
+    secrets:
+      - source: database_url_runtime
+        target: database_url
+      - notification_security_key
+    logging: {driver: local, options: {max-size: "10m", max-file: "5"}}
+    networks: [data]
+  notification-delivery:
+    build: .
+    command: ["python", "-m", "finbot.notification_delivery"]
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:noexec,nosuid,nodev,size=16m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    pids_limit: 50
+    environment:
+      OWNER_TELEGRAM_USER_ID: ${OWNER_TELEGRAM_USER_ID:-0}
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      NOTIFICATION_DELIVERY_INTERVAL_SECONDS: ${NOTIFICATION_DELIVERY_INTERVAL_SECONDS:-10}
+    depends_on: {provision-runtime: {condition: service_completed_successfully}}
+    secrets:
+      - telegram_bot_token
+      - source: database_url_runtime
+        target: database_url
+    logging: {driver: local, options: {max-size: "10m", max-file: "5"}}
+    networks:
+      telegram-egress: {gw_priority: 1}
+      data: {}
   mcp:
     profiles: [mcp]
     build: .
@@ -211,5 +257,6 @@ secrets:
   postgres_password: {file: ./secrets/postgres_password}
   http_security_key: {file: ./secrets/http_security_key}
   bank_import_security_key: {file: ./secrets/bank_import_security_key}
+  notification_security_key: {file: ./secrets/notification_security_key}
   miniapp_tls_fullchain: {file: ./secrets/miniapp_tls_fullchain.pem}
   miniapp_tls_private_key: {file: ./secrets/miniapp_tls_private_key.pem}

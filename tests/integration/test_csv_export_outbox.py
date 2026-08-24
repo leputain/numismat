@@ -27,13 +27,20 @@ async def test_postgres_enforces_privacy_safe_csv_export_job_shape() -> None:
     engine = create_async_engine(DATABASE_URL)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
+        telegram_user_id = 99_600_002
+        session.add(
+            User(
+                telegram_user_id=telegram_user_id,
+                telegram_chat_id=telegram_user_id,
+            )
+        )
         session.add(ProcessedUpdate(update_id=99_600_001))
         await session.flush()
         job = queue_csv_export(
             session,
             update_id=99_600_001,
-            owner_telegram_user_id=99_600_002,
-            chat_id=99_600_003,
+            owner_telegram_user_id=telegram_user_id,
+            chat_id=telegram_user_id,
         )
         await session.flush()
 
@@ -52,8 +59,8 @@ async def test_postgres_enforces_privacy_safe_csv_export_job_shape() -> None:
             TelegramResponseOutbox(
                 update_id=99_600_001,
                 sequence=1,
-                owner_telegram_user_id=99_600_002,
-                chat_id=99_600_003,
+                owner_telegram_user_id=telegram_user_id,
+                chat_id=telegram_user_id,
                 method="send_csv_export",
                 message_id=None,
                 body="private-csv-content",

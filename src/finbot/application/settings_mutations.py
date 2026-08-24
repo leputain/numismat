@@ -12,6 +12,8 @@ from finbot.application.dto import (
 from finbot.application.settings_text_input import SettingsTextInputTarget
 from finbot.domain.transactions import TransactionType
 
+MAX_SETTINGS_VERSION = 2**31 - 1
+
 
 class SettingsInputIngressOperation(StrEnum):
     ACCOUNT_CREATE = "account_create"
@@ -64,15 +66,20 @@ class BeginCategoryRenameCommand:
 @dataclass(frozen=True, slots=True)
 class ChangeTimezoneCommand:
     owner_id: UUID = field(repr=False)
-    expected_timezone: str = field(repr=False)
+    expected_version: int = field(repr=False)
     timezone: str = field(repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.owner_id, UUID):
             raise TypeError("Settings owner id must be a UUID")
-        for value in (self.expected_timezone, self.timezone):
-            if type(value) is not str or not 1 <= len(value) <= 64:
-                raise ValueError("Settings timezone is invalid")
+        if (
+            isinstance(self.expected_version, bool)
+            or not isinstance(self.expected_version, int)
+            or not 1 <= self.expected_version <= MAX_SETTINGS_VERSION
+        ):
+            raise ValueError("Settings version is invalid")
+        if type(self.timezone) is not str or not 1 <= len(self.timezone) <= 64:
+            raise ValueError("Settings timezone is invalid")
 
 
 def _validate_catalog_target(owner_id: UUID, entity_id: UUID, version: int) -> None:
@@ -125,6 +132,6 @@ class SettingsMutationRepository(Protocol):
     async def change_timezone(
         self,
         owner_id: UUID,
-        expected_timezone: str,
+        expected_version: int,
         timezone: str,
     ) -> OwnerSnapshot: ...

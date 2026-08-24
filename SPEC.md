@@ -13,13 +13,21 @@ cross-user операций, RBAC и самостоятельной регист
 primary; пустое значение сохраняет legacy singleton. Telegram принимает только private chat с `actor_id == chat_id`.
 
 Defaults: `ru_RU`, `RUB`, `Europe/Moscow`, счёт `Основная карта`. В настройках доступны основной счёт, timezone и
-управление справочниками. Режима сохранения без проверки нет: legacy-колонка `fast_mode`, пока она существует для
-совместимости схемы, не является пользовательской функцией.
+управление справочниками. Timezone владельца изменяется через optimistic version; новые расписания и бюджеты получают
+актуальный timezone, а ранее созданные сохраняют собственный неизменяемый snapshot. Режима сохранения без проверки
+нет: legacy-колонка `fast_mode`, пока она существует для совместимости схемы, не является пользовательской функцией.
 
 ## Ввод и единый review contract
 
 Быстрый ввод поддерживает пробелы и decimal comma/point, `сегодня`, `вчера`, `DD.MM[.YYYY]`, `@account`, `#category`
 и deterministic categorization.
+
+Сообщение, содержащее только положительную сумму (`500`, `500,50`, `500.50`, `1 200` или эквивалент с NBSP),
+создаёт тот же persistent quick draft в состоянии `wizard_type`. Оно не выбирает тип, категорию, счёт или валюту
+заранее. Далее пользователь проходит type → category → account → date → description → review без повторного ввода
+суммы; первые пять экранов показывают прогресс `1/5`…`5/5`. Back из категории возвращает к типу и сохраняет сумму.
+`1.500`, неверная группировка, ноль, знак, exponent, валюта и слова не интерпретируются как amount-only. Для
+одиночных `+500`/`-500` интерфейс просит убрать знак; старый полный синтаксис `+500 зарплата`/`-500 кафе` сохраняется.
 
 - отсутствие знака — расход;
 - `+` — доход;
@@ -66,7 +74,8 @@ batch целиком. Telegram document ingress использует тольк�
 ### Регулярные операции
 
 Расписание задаёт daily/weekly/monthly cadence с bounded interval, локальные дату/время, необязательную дату
-окончания и неизменяемый snapshot timezone владельца. Месячный recurrence clamp-ит день к концу месяца; ambiguous
+окончания и неизменяемый snapshot timezone владельца на момент создания. Изменение timezone в настройках влияет
+только на новые расписания; существующие не пересчитываются. Месячный recurrence clamp-ит день к концу месяца; ambiguous
 DST выбирает первый fold, gap сдвигается к первому существующему локальному времени. Каждая due-точка имеет
 уникальный `(schedule, occurrence_index)` instance. DB-only runner работает двумя короткими транзакционными фазами,
 использует advisory locks и bounded batches, берёт owner lock до staging и допускает максимум 32 unstaged pending
@@ -78,6 +87,20 @@ Runner никогда не создаёт transaction: он создаёт об�
 запрещены. Confirm связывает новую transaction с instance и `source=recurring`; cancel удаляет draft, а instance
 показывается как dismissed. Telegram даёт bounded список/detail и персональную Mini App link; Mini App предоставляет
 CRUD, pause/resume/delete/restore и bounded instance history с skip/retry.
+
+### Бюджеты и уведомления
+
+Budget progress рассчитывается отдельно для каждой валюты и возвращает факт расходов, остаток или перерасход,
+известные регулярные обязательства, commitment-only прогноз конца периода и безопасный дневной расход. Состояния
+закрыты: `on_track`, `watch` при достижении 80% с учётом известных обязательств и `over` при фактическом превышении
+лимита. Предупреждение ведёт к owner-scoped списку операций с точными period/type/currency/category filters.
+
+Telegram-уведомления о 80/100% бюджета, готовом recurring draft и недельном дайджесте выключены по умолчанию.
+Каждый owner включает их независимо и задаёт quiet hours и локальное время дайджеста. Scheduler создаёт bounded
+deduplicated jobs без Telegram credentials; delivery повторно проверяет allowlist, private chat, opt-in, quiet hours,
+owner-owned reference и актуальный budget threshold непосредственно перед сетью. Queue не содержит финансовых
+значений или текста сообщения. Retry ограничен пятью попытками; terminal jobs очищаются не ранее 400 дней bounded
+advisory-singleton tick, не затрагивающим pending/leased rows.
 
 ### Опциональное AI-предложение
 

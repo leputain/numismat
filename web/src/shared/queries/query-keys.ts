@@ -1,5 +1,14 @@
 import type { TimeSeriesGrain } from "../api/types";
 
+export interface TransactionQueryKeyFilters {
+  readonly start: string | null;
+  readonly end: string | null;
+  readonly type: "expense" | "income" | null;
+  readonly accountId: string | null;
+  readonly categoryId: string | null;
+  readonly currency: string | null;
+}
+
 export const queryKeys = {
   dashboard: ["dashboard"] as const,
   today: ["reports", "today"] as const,
@@ -9,7 +18,8 @@ export const queryKeys = {
   transactions: {
     all: ["transactions"] as const,
     activeRoot: ["transactions", "active"] as const,
-    active: (limit: number) => ["transactions", "active", { limit }] as const,
+    active: (limit: number, filters: TransactionQueryKeyFilters) =>
+      ["transactions", "active", { filters, limit }] as const,
     trashRoot: ["transactions", "trash"] as const,
     trash: (limit: number) => ["transactions", "trash", { limit }] as const,
     detailRoot: ["transactions", "detail"] as const,
@@ -23,8 +33,12 @@ export const queryKeys = {
   catalogs: {
     all: ["catalogs"] as const,
     accounts: ["catalogs", "accounts", { archived: false }] as const,
+    accountsByArchived: (archived: boolean) =>
+      ["catalogs", "accounts", { archived }] as const,
     categories: (kind: "expense" | "income") =>
       ["catalogs", "categories", { kind, archived: false }] as const,
+    categoriesByState: (kind: "expense" | "income", archived: boolean) =>
+      ["catalogs", "categories", { kind, archived }] as const,
   },
   budgets: {
     all: ["budgets"] as const,
@@ -70,5 +84,9 @@ export const queryKeys = {
       ["bank-imports", "row", batchId, rowId] as const,
     candidates: (batchId: string, rowId: string) =>
       ["bank-imports", "candidates", batchId, rowId] as const,
+  },
+  settings: {
+    all: ["settings"] as const,
+    notificationPreferences: ["settings", "notification-preferences"] as const,
   },
 } as const;

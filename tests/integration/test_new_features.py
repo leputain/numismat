@@ -24,7 +24,7 @@ from finbot.adapters.database.services.catalogs import rename_account
 from finbot.adapters.database.services.outbox import queue_edit_message_text
 from finbot.adapters.database.services.transactions import soft_delete_transaction, undo_last_action
 from finbot.adapters.database.services.updates import claim_update
-from finbot.adapters.telegram.ui import timezone_token
+from finbot.adapters.telegram.principal import TelegramPrincipal, telegram_principal_scope
 from finbot.application.interactions import DraftAction, DraftInteraction
 from finbot.bootstrap import build_dispatcher
 from finbot.config import Settings
@@ -126,6 +126,14 @@ def _callback_update(update_id: int, message_id: int, data: str) -> dict[str, ob
 
 async def _cleanup_database(factory: async_sessionmaker[Any]) -> None:
     async with factory() as session:
+        await session.execute(
+            text("DELETE FROM telegram_response_outbox WHERE update_id BETWEEN :first AND :last"),
+            {"first": UPDATE_BASE, "last": UPDATE_BASE + 1000},
+        )
+        await session.execute(
+            text("DELETE FROM processed_updates WHERE update_id BETWEEN :first AND :last"),
+            {"first": UPDATE_BASE, "last": UPDATE_BASE + 1000},
+        )
         user_id = await session.scalar(
             text("SELECT id FROM users WHERE telegram_user_id = :telegram_id"),
             {"telegram_id": OWNER_ID},
@@ -150,14 +158,6 @@ async def _cleanup_database(factory: async_sessionmaker[Any]) -> None:
             await session.execute(
                 text("DELETE FROM users WHERE id = :user_id"), {"user_id": user_id}
             )
-        await session.execute(
-            text("DELETE FROM telegram_response_outbox WHERE update_id BETWEEN :first AND :last"),
-            {"first": UPDATE_BASE, "last": UPDATE_BASE + 1000},
-        )
-        await session.execute(
-            text("DELETE FROM processed_updates WHERE update_id BETWEEN :first AND :last"),
-            {"first": UPDATE_BASE, "last": UPDATE_BASE + 1000},
-        )
         await session.commit()
 
 
@@ -217,7 +217,8 @@ class TelegramHarness:
                 if item.callback.__name__ == "versioned_draft"
             ),
         )
-        await handler(callback, None)
+        with telegram_principal_scope(TelegramPrincipal(OWNER_ID, OWNER_ID)):
+            await handler(callback, None)
         return update_id
 
     async def draft(self) -> tuple[UUID, str, dict[str, object], int, bool]:
@@ -1451,12 +1452,15 @@ async def test_catalog_callbacks_reject_stale_versions_and_typed_rename_is_guard
             == account_id
         )
         await session.execute(
-            text("UPDATE users SET timezone = :timezone WHERE id = :user_id"),
+            text(
+                "UPDATE users SET timezone = :timezone, "
+                "settings_version = settings_version + 1 WHERE id = :user_id"
+            ),
             {"timezone": "Europe/Samara", "user_id": user_id},
         )
         await session.commit()
 
-    await harness.callback(f"s:timezone:0:{timezone_token('Europe/Moscow')}")
+    await harness.callback("s:timezone:0:1")
     async with harness.factory() as session:
         assert (
             await session.scalar(
@@ -1617,7 +1621,7 @@ async def test_undo_without_audit_event_never_guesses_which_row_to_mutate() -> N
     engine = create_async_engine(DATABASE_URL)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
-        user = User(telegram_user_id=900000007)
+        user = User(telegram_user_id=900000007, telegram_chat_id=900000007)
         session.add(user)
         await session.flush()
         account = Account(user_id=user.id, name="Без аудита", slug="без-аудита")

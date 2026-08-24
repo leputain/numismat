@@ -35,11 +35,13 @@ from finbot.adapters.database.repositories.transactions import (
     SqlAlchemyTransactionCommandRepository,
 )
 from finbot.adapters.deterministic_draft_parser import DeterministicQuickDraftParser
+from finbot.application.draft_composition import BeginComposeDraftCommand
 from finbot.application.draft_conflicts import (
     PENDING_DRAFT_INTENT_KEY,
     ResolveDraftConflictCommand,
 )
 from finbot.application.draft_ingress import (
+    BeginQuickDraftCommand,
     BeginRepeatDraftCommand,
     BeginWizardDraftCommand,
     DraftIngressStatus,
@@ -103,6 +105,7 @@ from finbot.application.transaction_edit_text_input import (
     TransactionEditTextInputCommand,
     TransactionEditTextInputStatus,
 )
+from finbot.application.use_cases.draft_composition import PrepareComposedDraft
 from finbot.application.use_cases.draft_conflicts import (
     PrepareDraftConflictReplacement as PrepareConflictReplacement,
 )
@@ -200,6 +203,8 @@ class SqlAlchemyRevisionMutationCommands:
                 SystemDraftPreparationClock(),
             ),
         )
+        navigation_catalogs = SqlAlchemyDraftNavigationCatalogRepository(session)
+        compose_drafts = PrepareComposedDraft(reader, navigation_catalogs)
 
         self._drafts = drafts
         self._transactions = transactions
@@ -208,12 +213,14 @@ class SqlAlchemyRevisionMutationCommands:
             transaction_commands,
             owners,
             quick_drafts=quick_drafts,
+            compose_drafts=compose_drafts,
         )
         self._conflicts = ResolveDraftConflict(
             repository,
             PrepareConflictReplacement(
                 quick_drafts,
                 SqlAlchemyDraftConflictReplacementTargets(session),
+                compose_drafts=compose_drafts,
             ),
         )
         self._draft_navigation = DraftNavigationUseCases(
@@ -221,7 +228,7 @@ class SqlAlchemyRevisionMutationCommands:
             owners,
             _empty_accounts,
             _empty_categories,
-            SqlAlchemyDraftNavigationCatalogRepository(session),
+            navigation_catalogs,
         )
         self._draft_rules = DraftRuleUseCases(drafts)
         self._finance_text = FinanceDraftTextInputUseCase(
@@ -289,6 +296,25 @@ class SqlAlchemyRevisionMutationCommands:
     async def create_draft(self, owner_id: UUID) -> tuple[int, DraftSnapshot]:
         self._require_supported_slot(await self._drafts.get_active(owner_id))
         result = await self._ingress.begin_wizard(BeginWizardDraftCommand(owner_id))
+        status = 201 if result.status is DraftIngressStatus.STARTED else 200
+        return status, result.draft
+
+    async def begin_quick_draft(
+        self,
+        owner_id: UUID,
+        text: str,
+    ) -> tuple[int, DraftSnapshot]:
+        self._require_supported_slot(await self._drafts.get_active(owner_id))
+        result = await self._ingress.begin_quick(BeginQuickDraftCommand(owner_id, text))
+        status = 201 if result.status is DraftIngressStatus.STARTED else 200
+        return status, result.draft
+
+    async def compose_draft(
+        self,
+        command: BeginComposeDraftCommand,
+    ) -> tuple[int, DraftSnapshot]:
+        self._require_supported_slot(await self._drafts.get_active(command.owner_id))
+        result = await self._ingress.begin_compose(command)
         status = 201 if result.status is DraftIngressStatus.STARTED else 200
         return status, result.draft
 

@@ -6,9 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from finbot.adapters.database.models import Account, Category, User
 from finbot.application.dto import AccountSnapshot, CategorySnapshot, OwnerSnapshot
 from finbot.application.errors import (
+    ApplicationValidationError,
     EntityNotFoundError,
     ObjectVersionConflictError,
 )
+from finbot.application.settings_mutations import MAX_SETTINGS_VERSION
 from finbot.domain.transactions import TransactionType
 
 
@@ -20,6 +22,7 @@ def _owner_snapshot(owner: User) -> OwnerSnapshot:
         base_currency=owner.base_currency,
         default_account_id=owner.default_account_id,
         fast_mode=owner.fast_mode,
+        settings_version=owner.settings_version,
     )
 
 
@@ -108,13 +111,15 @@ class SqlAlchemySettingsMutationRepository:
     async def change_timezone(
         self,
         owner_id: UUID,
-        expected_timezone: str,
+        expected_version: int,
         timezone: str,
     ) -> OwnerSnapshot:
         owner = await self._owner(owner_id)
-        if owner.timezone != expected_timezone:
-            raise ObjectVersionConflictError()
-        if owner.timezone != timezone:
-            owner.timezone = timezone
-            await self._session.flush()
+        if owner.settings_version != expected_version:
+            raise ObjectVersionConflictError(current_version=owner.settings_version)
+        if owner.settings_version >= MAX_SETTINGS_VERSION:
+            raise ApplicationValidationError("Достигнут предел версий настроек")
+        owner.timezone = timezone
+        owner.settings_version += 1
+        await self._session.flush()
         return _owner_snapshot(owner)

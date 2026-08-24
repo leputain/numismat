@@ -107,6 +107,8 @@ def _transaction(
     amount_minor: int = 2**53 + 17,
     kind: TransactionType = TransactionType.EXPENSE,
     currency: str = "RUB",
+    account_id: UUID | None = None,
+    category_id: UUID | None = None,
     deleted_at: datetime | None = None,
     description: str = "private-description-marker",
 ) -> TransactionSnapshot:
@@ -115,9 +117,9 @@ def _transaction(
         kind=kind,
         amount_minor=amount_minor,
         currency=currency,
-        account_id=uuid7(),
+        account_id=account_id or uuid7(),
         account_name="Private account marker",
-        category_id=uuid7(),
+        category_id=category_id or uuid7(),
         category_name="Private category marker",
         category_emoji="▫️",
         occurred_at=occurred_at,
@@ -481,6 +483,134 @@ async def test_keyset_pagination_is_active_only_and_detail_includes_soft_deleted
 
 
 @pytest.mark.asyncio
+async def test_transaction_filters_are_combined_before_keyset_and_bind_cursor() -> None:
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    end = datetime(2026, 9, 1, tzinfo=UTC)
+    account_id = UUID("018f0000-0000-7000-8000-000000000010")
+    category_id = UUID("018f0000-0000-7000-8000-000000000020")
+    matching = (
+        _transaction(
+            occurred_at=start + timedelta(days=10),
+            account_id=account_id,
+            category_id=category_id,
+        ),
+        _transaction(
+            occurred_at=start,
+            account_id=account_id,
+            category_id=category_id,
+        ),
+    )
+    excluded = (
+        _transaction(
+            occurred_at=end,
+            account_id=account_id,
+            category_id=category_id,
+        ),
+        _transaction(
+            occurred_at=start + timedelta(days=1),
+            kind=TransactionType.INCOME,
+            account_id=account_id,
+            category_id=category_id,
+        ),
+        _transaction(
+            occurred_at=start + timedelta(days=1),
+            account_id=uuid7(),
+            category_id=category_id,
+        ),
+        _transaction(
+            occurred_at=start + timedelta(days=1),
+            account_id=account_id,
+            category_id=uuid7(),
+        ),
+        _transaction(
+            occurred_at=start + timedelta(days=1),
+            currency="USD",
+            account_id=account_id,
+            category_id=category_id,
+        ),
+        _transaction(
+            occurred_at=start + timedelta(days=1),
+            account_id=account_id,
+            category_id=category_id,
+            deleted_at=NOW,
+        ),
+    )
+    app, factory, _owner_id = _app((*matching, *excluded))
+    filters = {
+        "start": "2026-08-01T00:00:00Z",
+        "end": "2026-09-01T00:00:00Z",
+        "type": "expense",
+        "account_id": str(account_id),
+        "category_id": str(category_id),
+        "currency": "RUB",
+    }
+    equivalent_filters = {
+        **filters,
+        "start": "2026-08-01T00:00:00.000000Z",
+        "end": "2026-09-01T00:00:00.0Z",
+    }
+
+    async with _client(app) as client:
+        first = await client.get(
+            "/api/v1/transactions",
+            params={**filters, "limit": "1"},
+        )
+        cursor = first.json()["next_cursor"]
+        second = await client.get(
+            "/api/v1/transactions",
+            params={**equivalent_filters, "limit": "1", "cursor": cursor},
+        )
+        changed_filter = await client.get(
+            "/api/v1/transactions",
+            params={**filters, "currency": "USD", "cursor": cursor},
+        )
+        removed_filters = await client.get(
+            "/api/v1/transactions",
+            params={"cursor": cursor},
+        )
+
+    assert first.status_code == 200
+    assert [item["id"] for item in first.json()["items"]] == [str(matching[0].transaction_id)]
+    assert first.json()["items"][0]["amount_minor"] == str(matching[0].amount_minor)
+    assert isinstance(cursor, str) and len(cursor) == 76
+    assert second.status_code == 200
+    assert [item["id"] for item in second.json()["items"]] == [str(matching[1].transaction_id)]
+    assert second.json()["next_cursor"] is None
+    for rejected in (changed_filter, removed_filters):
+        assert rejected.status_code == 422
+        assert rejected.json()["error"]["code"] == "invalid_cursor"
+    assert factory.entries == 4
+    for response in (first, second, changed_filter, removed_filters):
+        _security_headers(response)
+
+
+@pytest.mark.asyncio
+async def test_transaction_filters_reject_invalid_contract_before_database() -> None:
+    app, factory, _owner_id = _app(())
+    cases = (
+        "/api/v1/transactions?start=2026-08-01T00%3A00%3A00Z",
+        "/api/v1/transactions?end=2026-09-01T00%3A00%3A00Z",
+        "/api/v1/transactions?start=2026-08-01T00%3A00%3A00Z&end=2026-08-01T00%3A00%3A00Z",
+        "/api/v1/transactions?start=2025-01-01T00%3A00%3A00Z&end=2026-08-01T00%3A00%3A00Z",
+        "/api/v1/transactions?type=transfer",
+        "/api/v1/transactions?type=expense&type=income",
+        "/api/v1/transactions?account_id=018F0000-0000-7000-8000-000000000001",
+        "/api/v1/transactions?category_id=not-a-uuid",
+        "/api/v1/transactions?currency=rub",
+        "/api/v1/transactions?currency=R1B",
+    )
+
+    async with _client(app) as client:
+        responses = [await client.get(path) for path in cases]
+
+    assert all(response.status_code == 422 for response in responses)
+    assert all(response.json()["error"]["code"] == "validation_failed" for response in responses)
+    assert factory.entries == 0
+    for response in responses:
+        _security_headers(response)
+
+
+@pytest.mark.asyncio
 async def test_query_ambiguity_invalid_cursor_and_uuid_have_fixed_errors() -> None:
     app, factory, _owner_id = _app(())
     cases = (
@@ -564,6 +694,43 @@ async def test_finance_openapi_is_authenticated_bounded_and_uses_string_money() 
         "minimum": 1,
         "type": "integer",
     }
+    assert {item["name"] for item in transaction_parameters} == {
+        "X-Session-Binding",
+        "limit",
+        "start",
+        "end",
+        "type",
+        "account_id",
+        "category_id",
+        "currency",
+        "cursor",
+    }
+    assert {item["name"] for item in transaction_parameters if item["required"]} == {
+        "X-Session-Binding"
+    }
+    assert next(item for item in transaction_parameters if item["name"] == "type")["schema"] == {
+        "enum": ["expense", "income"],
+        "type": "string",
+    }
+    for parameter_name in ("account_id", "category_id"):
+        identifier_schema = next(
+            item for item in transaction_parameters if item["name"] == parameter_name
+        )["schema"]
+        assert identifier_schema["format"] == "uuid"
+        assert identifier_schema["minLength"] == identifier_schema["maxLength"] == 36
+    currency_schema = next(item for item in transaction_parameters if item["name"] == "currency")[
+        "schema"
+    ]
+    assert currency_schema == {
+        "maxLength": 3,
+        "minLength": 3,
+        "pattern": "^[A-Z]{3}$",
+        "type": "string",
+    }
+    cursor_description = next(item for item in transaction_parameters if item["name"] == "cursor")[
+        "schema"
+    ]["description"]
+    assert "filter-bound" in cursor_description
     detail_parameters = paths["/api/v1/transactions/{transaction_id}"]["get"]["parameters"]
     assert (
         len(
@@ -603,9 +770,17 @@ async def test_finance_openapi_is_authenticated_bounded_and_uses_string_money() 
 @pytest.mark.asyncio
 async def test_finance_logs_and_errors_exclude_payload_cursor_owner_and_cookie() -> None:
     marker = "private-description-marker"
-    transaction = _transaction(description=marker)
+    account_id = UUID("018f0000-0000-7000-8000-000000000031")
+    category_id = UUID("018f0000-0000-7000-8000-000000000032")
+    transaction = _transaction(
+        account_id=account_id,
+        category_id=category_id,
+        description=marker,
+    )
     second_transaction = _transaction(
         occurred_at=transaction.occurred_at - timedelta(seconds=1),
+        account_id=account_id,
+        category_id=category_id,
         description=marker,
     )
     app, _factory, owner_id = _app((transaction, second_transaction))
@@ -617,12 +792,26 @@ async def test_finance_logs_and_errors_exclude_payload_cursor_owner_and_cookie()
     original_level = root.level
     root.handlers[:] = [handler]
     root.setLevel(logging.INFO)
+    filters = {
+        "start": "2026-08-01T00:00:00Z",
+        "end": "2026-09-01T00:00:00Z",
+        "type": "expense",
+        "account_id": str(account_id),
+        "category_id": str(category_id),
+        "currency": "RUB",
+    }
     try:
         async with _client(app) as client:
-            first = await client.get("/api/v1/transactions?limit=1")
+            first = await client.get(
+                "/api/v1/transactions",
+                params={**filters, "limit": "1"},
+            )
             cursor = first.json()["next_cursor"]
             tampered = cursor[:-1] + ("A" if cursor[-1] != "A" else "B")
-            rejected = await client.get(f"/api/v1/transactions?cursor={tampered}")
+            rejected = await client.get(
+                "/api/v1/transactions",
+                params={**filters, "cursor": tampered},
+            )
     finally:
         root.handlers[:] = original_handlers
         root.setLevel(original_level)
@@ -637,6 +826,13 @@ async def test_finance_logs_and_errors_exclude_payload_cursor_owner_and_cookie()
         str(owner_id),
         str(transaction.transaction_id),
         str(transaction.amount_minor),
+        str(account_id),
+        str(category_id),
+        "2026-08-01T00:00:00Z",
+        "2026-08-01T00%3A00%3A00Z",
+        "2026-09-01T00:00:00Z",
+        "expense",
+        "RUB",
         cursor,
         tampered,
     ):

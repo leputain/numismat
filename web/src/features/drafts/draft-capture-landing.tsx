@@ -180,14 +180,26 @@ export function DraftCaptureLanding({
             Пошаговый режим отдельно спросит тип, сумму, категорию, счёт, дату и описание.
           </p>
         </div>
-        <button
-          className="button button--ghost"
-          disabled={actionsDisabled}
-          onClick={onStartWizard}
-          type="button"
-        >
-          Открыть полный ввод
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            aria-disabled={actionsDisabled}
+            className="button button--secondary"
+            onClick={(event) => {
+              if (actionsDisabled) event.preventDefault();
+            }}
+            to="/draft/compose"
+          >
+            Все поля сразу
+          </Link>
+          <button
+            className="button button--ghost"
+            disabled={actionsDisabled}
+            onClick={onStartWizard}
+            type="button"
+          >
+            Пошаговый ввод
+          </button>
+        </div>
       </section>
     </>
   );

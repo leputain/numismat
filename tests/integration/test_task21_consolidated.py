@@ -18,7 +18,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from finbot.adapters.bank_import.csv_parser import StrictBankCsvParser
 from finbot.adapters.bank_import.digests import HmacBankImportDigester
-from finbot.adapters.database.models import Account, Category, ImportRow, Transaction, User
+from finbot.adapters.database.models import (
+    Account,
+    Category,
+    ImportRow,
+    RecurringInstance,
+    RecurringSchedule,
+    Transaction,
+    User,
+)
 from finbot.adapters.database.provision_readonly import (
     ReadonlyProvisioningTarget,
     provision_readonly,
@@ -37,6 +45,9 @@ from finbot.adapters.database.repositories.http_mutations import (
     SqlAlchemyHttpMutationUnitOfWorkFactory,
 )
 from finbot.adapters.database.repositories.recurring import SqlAlchemyRecurringRepository
+from finbot.adapters.database.repositories.settings_mutations import (
+    SqlAlchemySettingsMutationRepository,
+)
 from finbot.adapters.database.repositories.transactions import (
     SqlAlchemyTransactionCommandRepository,
 )
@@ -60,22 +71,25 @@ from finbot.application.dto import ConfirmTransactionDraftCommand
 from finbot.application.errors import InvalidStateError, ObjectVersionConflictError
 from finbot.application.exchange_rates import PublishManualRateVersionCommand
 from finbot.application.recurring import CreateRecurringScheduleCommand
+from finbot.application.settings_mutations import ChangeTimezoneCommand
 from finbot.application.use_cases.bank_imports import (
     BankImportPreparer,
     ListReconciliationCandidates,
 )
-from finbot.application.use_cases.budgets import BudgetUseCases
+from finbot.application.use_cases.budgets import BudgetUseCases, GetBudgetProgress
 from finbot.application.use_cases.exchange_rates import (
     GetExchangeRateVersion,
     PublishManualExchangeRateVersion,
 )
 from finbot.application.use_cases.recurring import GetRecurringSchedule, RecurringUseCases
+from finbot.application.use_cases.settings_mutations import ChangeSettingsTimezone
 from finbot.domain.budgets import BudgetDefinition
 from finbot.domain.exchange_rates import ExchangeRateEntry, parse_exchange_rate
 from finbot.domain.recurrence import (
     RecurrenceCadence,
     RecurrenceRule,
     RecurringTransactionDefinition,
+    recurrence_occurrence,
 )
 from finbot.domain.transactions import TransactionType
 
@@ -514,6 +528,69 @@ async def test_budget_recurring_and_exchange_rate_contracts_persist_together() -
             assert loaded_schedule.definition.recurrence.timezone == "Europe/Moscow"
             assert loaded_schedule.version == 1
 
+            budget_reader = SqlAlchemyBudgetRepository(session)
+            projected = await GetBudgetProgress(budget_reader)(
+                owner_id,
+                budget.budget_id,
+                as_of=NOW,
+            )
+            assert projected.known_recurring_minor == 999
+            assert projected.forecast_minor == 999
+            assert projected.safe_daily_minor == (50_000 - 999) // 18
+
+            first_occurrence = recurrence_occurrence(
+                loaded_schedule.definition.recurrence,
+                0,
+            )
+            next_occurrence = recurrence_occurrence(
+                loaded_schedule.definition.recurrence,
+                1,
+            )
+            assert first_occurrence is not None
+            assert next_occurrence is not None
+            stored_schedule = await session.scalar(
+                select(RecurringSchedule).where(
+                    RecurringSchedule.id == schedule.schedule_id,
+                    RecurringSchedule.user_id == owner_id,
+                )
+            )
+            assert stored_schedule is not None
+            session.add(
+                RecurringInstance(
+                    schedule_id=stored_schedule.id,
+                    user_id=owner_id,
+                    occurrence_index=first_occurrence.index,
+                    nominal_local=first_occurrence.nominal_local,
+                    scheduled_for=first_occurrence.scheduled_for,
+                    timezone=stored_schedule.timezone,
+                    dst_adjusted=first_occurrence.dst_adjusted,
+                    type="expense",
+                    amount_minor=stored_schedule.amount_minor,
+                    currency=stored_schedule.currency,
+                    account_id=stored_schedule.account_id,
+                    category_id=stored_schedule.category_id,
+                    description=stored_schedule.description,
+                    status="pending",
+                    next_attempt_at=NOW,
+                    attempt_count=0,
+                    version=1,
+                    created_at=NOW,
+                    updated_at=NOW,
+                )
+            )
+            stored_schedule.next_occurrence_index = next_occurrence.index
+            stored_schedule.next_due_local = next_occurrence.nominal_local
+            stored_schedule.next_due_at = next_occurrence.scheduled_for
+            await session.flush()
+
+            materialized = await GetBudgetProgress(budget_reader)(
+                owner_id,
+                budget.budget_id,
+                as_of=NOW,
+            )
+            assert materialized.known_recurring_minor == 999
+            assert materialized.forecast_minor == projected.forecast_minor
+
             rates = SqlAlchemyExchangeRateRepository(session)
             published = await PublishManualExchangeRateVersion(rates)(
                 PublishManualRateVersionCommand(
@@ -535,6 +612,61 @@ async def test_budget_recurring_and_exchange_rate_contracts_persist_together() -
             )
             assert loaded_rate.summary.version == 1
             assert loaded_rate.entries[0].entry.value.canonical == "90.125"
+    finally:
+        await _cleanup_owner(factory, owner_id)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_recurring_timezone_is_an_immutable_creation_snapshot() -> None:
+    engine = create_async_engine(DATABASE_URL)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    owner_id, account_id, category_id = await _seed_owner(factory)
+    try:
+        async with factory.begin() as session:
+            recurring_repository = SqlAlchemyRecurringRepository(session)
+            recurring = RecurringUseCases(recurring_repository)
+            get_schedule = GetRecurringSchedule(recurring_repository)
+
+            def definition(name: str, timezone: str) -> RecurringTransactionDefinition:
+                return RecurringTransactionDefinition(
+                    name=name,
+                    kind=TransactionType.EXPENSE,
+                    amount_minor=999,
+                    currency="RUB",
+                    account_id=account_id,
+                    category_id=category_id,
+                    recurrence=RecurrenceRule(
+                        cadence=RecurrenceCadence.MONTHLY,
+                        interval=1,
+                        anchor_date=date(2026, 8, 15),
+                        local_time=time(9, 30),
+                        timezone=timezone,
+                    ),
+                )
+
+            old_schedule = await recurring.create(
+                CreateRecurringScheduleCommand(
+                    owner_id=owner_id,
+                    definition=definition("Старый timezone", "Europe/Moscow"),
+                )
+            )
+            changed = await ChangeSettingsTimezone(
+                SqlAlchemySettingsMutationRepository(session)
+            ).execute(ChangeTimezoneCommand(owner_id, 1, "Europe/Samara"))
+            assert changed.settings_version == 2
+
+            new_schedule = await recurring.create(
+                CreateRecurringScheduleCommand(
+                    owner_id=owner_id,
+                    definition=definition("Новый timezone", "Europe/Samara"),
+                )
+            )
+            old_snapshot = await get_schedule(owner_id, old_schedule.schedule_id)
+            new_snapshot = await get_schedule(owner_id, new_schedule.schedule_id)
+
+            assert old_snapshot.definition.recurrence.timezone == "Europe/Moscow"
+            assert new_snapshot.definition.recurrence.timezone == "Europe/Samara"
     finally:
         await _cleanup_owner(factory, owner_id)
         await engine.dispose()

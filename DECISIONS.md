@@ -136,6 +136,15 @@
   доменом; `(schedule_id, occurrence_index)` и transaction provenance уникальны на уровне PostgreSQL. Materialization
   выбирает максимум одну due-схему на owner за tick для tenant fairness. Runner не читает Telegram allowlist, поэтому
   offboarding требует предварительно pause-нуть schedules или остановить runner.
+- Owner timezone изменяется отдельной optimistic-versioned настройкой. Create schedule/budget читает актуальное
+  значение под owner lock и сохраняет его как snapshot; последующая смена настройки не переписывает и не
+  пересчитывает существующие определения. Это сохраняет воспроизводимость due/report periods без скрытой миграции
+  пользовательских данных.
+- Notification producer и Telegram delivery разделены по credentials и network boundary. Queue хранит только
+  privacy-safe owner/reference/dedupe/state metadata; перед внешней отправкой budget alert заново вычисляется его
+  authoritative exact threshold, поэтому исправленная операция или увеличенный лимит подавляет stale job. Terminal
+  rows имеют 400-дневный retention, длиннее максимального budget horizon; singleton cleanup удаляет bounded batch и
+  никогда не затрагивает pending/leased delivery.
 - Alembic `0012_multitenant_integrity` fail closed проверяет legacy данные и вводит private actor/chat constraint плюс
   composite owner foreign keys для default account, category parent, audit transaction, recurring/import draft и
   Telegram outbox. RLS отложен: безопасное введение требует отдельных DB roles/context contracts для pre-auth,

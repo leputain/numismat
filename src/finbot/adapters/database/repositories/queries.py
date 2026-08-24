@@ -16,6 +16,7 @@ from finbot.adapters.database.queries.transactions import (
 )
 from finbot.application.catalogs import BOUNDED_CATALOG_FETCH_LIMIT
 from finbot.application.dto import (
+    EMPTY_TRANSACTION_LIST_FILTERS,
     AccountSnapshot,
     CategorySnapshot,
     CategoryTotalSnapshot,
@@ -28,6 +29,7 @@ from finbot.application.dto import (
     TimeSeriesGrain,
     TransactionCursor,
     TransactionCursorItem,
+    TransactionListFilters,
     TransactionSnapshot,
 )
 from finbot.application.queries.transactions import TransactionDetails
@@ -96,12 +98,21 @@ class SqlAlchemyQueryRepository:
                     User.base_currency,
                     User.default_account_id,
                     User.fast_mode,
+                    User.settings_version,
                 ).where(User.id == owner_id)
             )
         ).one_or_none()
         if row is None:
             return None
-        user_id, locale, timezone, base_currency, default_account_id, fast_mode = row._t
+        (
+            user_id,
+            locale,
+            timezone,
+            base_currency,
+            default_account_id,
+            fast_mode,
+            settings_version,
+        ) = row._t
         return OwnerSnapshot(
             owner_id=user_id,
             locale=locale,
@@ -109,6 +120,7 @@ class SqlAlchemyQueryRepository:
             base_currency=base_currency,
             default_account_id=default_account_id,
             fast_mode=fast_mode,
+            settings_version=settings_version,
         )
 
     async def list_accounts(
@@ -282,12 +294,14 @@ class SqlAlchemyQueryRepository:
         *,
         cursor: TransactionCursor | None,
         limit: int,
+        filters: TransactionListFilters = EMPTY_TRANSACTION_LIST_FILTERS,
     ) -> tuple[TransactionCursorItem, ...]:
         rows = await list_transaction_details_after(
             self._session,
             owner_id,
             cursor=cursor,
             limit=limit,
+            filters=filters,
         )
         return tuple(
             TransactionCursorItem(
@@ -354,10 +368,7 @@ class SqlAlchemyQueryRepository:
         grain: TimeSeriesGrain,
         row_limit: int,
     ) -> tuple[TimeSeriesAggregateRow, ...]:
-        if (
-            type(row_limit) is not int
-            or not 1 <= row_limit <= _MAX_TIMESERIES_QUERY_ROW_LIMIT
-        ):
+        if type(row_limit) is not int or not 1 <= row_limit <= _MAX_TIMESERIES_QUERY_ROW_LIMIT:
             raise ValueError("time-series query row limit is invalid")
         local_timestamp = func.timezone(timezone, Transaction.occurred_at)
         bucket_local_date = cast(

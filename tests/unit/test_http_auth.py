@@ -499,8 +499,10 @@ async def test_auth_login_me_logout_lifecycle_and_cookie_flags() -> None:
         "base_currency": "RUB",
         "expires_at": "2026-08-13T13:00:00.000Z",
         "locale": "ru_RU",
+        "settings_version": 1,
         "timezone": "Europe/Moscow",
     }
+    assert me.json()["settings_version"] == 1
     assert session_binding == HttpSecurityDigester(SECURITY_KEY).session_binding(SESSION_TOKEN)
     set_cookies = login.headers.get_list("set-cookie")
     assert len(set_cookies) == 2
@@ -1131,6 +1133,12 @@ async def test_auth_openapi_retains_manual_body_schema() -> None:
     assert body_schema["properties"]["initData"]["maxLength"] == 8192
     session_schema = schema["components"]["schemas"]["AuthSessionResponse"]
     assert session_schema["properties"]["expires_at"]["format"] == "date-time"
+    assert session_schema["properties"]["settings_version"] == {
+        "maximum": 2**31 - 1,
+        "minimum": 1,
+        "title": "Settings Version",
+        "type": "integer",
+    }
     assert schema["components"]["securitySchemes"]["SessionCookie"] == {
         "in": "cookie",
         "name": "__Host-numismat_session",

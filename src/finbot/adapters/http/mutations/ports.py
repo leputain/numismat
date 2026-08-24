@@ -25,17 +25,31 @@ from finbot.application.catalogs import (
     UpdateAccountCommand,
     UpdateCategoryCommand,
 )
+from finbot.application.draft_composition import BeginComposeDraftCommand
 from finbot.application.dto import DraftSnapshot, MutationResult
 from finbot.application.ports import DraftRepository
 from finbot.application.revision_mutations import DraftPatchCommand, DraftPatchResult
 from finbot.application.use_cases.bank_imports import BankImportUseCases
 from finbot.application.use_cases.budgets import BudgetUseCases
 from finbot.application.use_cases.exchange_rates import ExchangeRateUseCases
+from finbot.application.use_cases.notifications import NotificationPreferencesUseCases
 from finbot.application.use_cases.recurring import RecurringUseCases
+from finbot.application.use_cases.settings_mutations import ChangeSettingsTimezone
 
 
 class RevisionMutationCommands(Protocol):
     async def create_draft(self, owner_id: UUID) -> tuple[int, DraftSnapshot]: ...
+
+    async def begin_quick_draft(
+        self,
+        owner_id: UUID,
+        text: str,
+    ) -> tuple[int, DraftSnapshot]: ...
+
+    async def compose_draft(
+        self,
+        command: BeginComposeDraftCommand,
+    ) -> tuple[int, DraftSnapshot]: ...
 
     async def patch_draft(
         self,
@@ -148,7 +162,9 @@ class MutationUnitOfWork(Protocol):
     drafts: DraftRepository
     exchange_rates: ExchangeRateUseCases
     idempotency: MutationIdempotency
+    notifications: NotificationPreferencesUseCases
     owner_timezone: str
+    settings: ChangeSettingsTimezone
 
     async def __aenter__(self) -> Self: ...
 

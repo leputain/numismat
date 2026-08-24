@@ -8,6 +8,7 @@ export interface AuthSession {
   readonly locale: string;
   readonly timezone: string;
   readonly baseCurrency: string;
+  readonly settingsVersion: number;
   readonly expiresAt: string;
 }
 
@@ -30,6 +31,10 @@ function parseSession(payload: GeneratedAuthSession): AuthSession {
     payload.timezone.length > 64 ||
     typeof payload.base_currency !== "string" ||
     !/^[A-Z]{3}$/u.test(payload.base_currency) ||
+    typeof payload.settings_version !== "number" ||
+    !Number.isInteger(payload.settings_version) ||
+    payload.settings_version < 1 ||
+    payload.settings_version > 2 ** 31 - 1 ||
     typeof payload.expires_at !== "string" ||
     !Number.isFinite(Date.parse(payload.expires_at))
   ) {
@@ -39,6 +44,7 @@ function parseSession(payload: GeneratedAuthSession): AuthSession {
     locale: payload.locale,
     timezone: payload.timezone,
     baseCurrency: payload.base_currency,
+    settingsVersion: payload.settings_version,
     expiresAt: payload.expires_at,
   };
 }

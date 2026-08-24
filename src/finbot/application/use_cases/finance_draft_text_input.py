@@ -90,6 +90,12 @@ def _clear_rule_learning(payload: dict[str, object]) -> None:
     payload.pop("pending_rule", None)
 
 
+def _uses_guided_capture(payload: Mapping[str, Any]) -> bool:
+    return str(payload.get("flow")) == "wizard" or (
+        str(payload.get("flow")) == "quick" and str(payload.get("input_mode")) == "amount_only"
+    )
+
+
 def _attach_category(
     payload: dict[str, object],
     category: CategorySnapshot,
@@ -358,7 +364,7 @@ class FinanceDraftTextInputUseCase:
             )
 
         accounts = tuple(await self._accounts(command.owner_id))
-        target = "wizard_account" if str(payload.get("flow")) == "wizard" else "quick_account"
+        target = "wizard_account" if _uses_guided_capture(payload) else "quick_account"
         return await self._update(
             command,
             owner,
@@ -414,7 +420,7 @@ class FinanceDraftTextInputUseCase:
             if review_target is None:  # pragma: no cover - guarded above
                 raise InvalidStateError("Черновик не содержит безопасного экрана возврата")
             target = review_target
-        elif str(payload.get("flow")) == "wizard":
+        elif _uses_guided_capture(payload):
             target = "wizard_date"
         else:
             target = "quick_confirm"

@@ -140,13 +140,14 @@ def test_main_menu_handlers_register_before_a_broad_message_fallback() -> None:
     dispatcher.message.register(broad_fallback)
     callback_names = [handler.callback.__name__ for handler in dispatcher.message.handlers]
 
-    assert callback_names[:6] == [
+    assert callback_names[:7] == [
         "start",
         "menu",
         "menu",
         "help_menu",
         "help_menu",
         "quick_help",
+        "more_menu",
     ]
     assert callback_names[-1] == "broad_fallback"
 

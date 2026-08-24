@@ -11,6 +11,7 @@ import { emitClientEvent } from "../../shared/logging/client-events";
 import { restartBudgetPagination } from "../../shared/mutations/query-recovery";
 import { queryKeys } from "../../shared/queries/query-keys";
 import { BudgetCard } from "./budget-card";
+import { BudgetStateLegend } from "./budget-progress";
 import { budgetMonthWindow, ownerMonthWindow } from "./budget-window";
 
 const PAGE_LIMIT = 20;
@@ -130,6 +131,7 @@ export function BudgetsPage() {
         eyebrow="Контроль расходов"
         title="Бюджеты"
       />
+      <BudgetStateLegend />
       <div aria-label="Раздел бюджетов" className="segment-control" role="tablist">
         <button
           aria-selected={mode === "active"}

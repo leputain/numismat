@@ -361,3 +361,198 @@ class RecurringRunnerSettings(BaseSettings):
         if secret.is_file():
             values["database_url"] = secret.read_text(encoding="utf-8").strip()
         return cls.model_validate(values)
+
+
+class NotificationSchedulerSettings(BaseSettings):
+    """DB-only notification producer with an independent keyed-digest secret."""
+
+    model_config = SettingsConfigDict(
+        env_file=None,
+        extra="ignore",
+        hide_input_in_errors=True,
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
+    database_url: str = Field(
+        default="postgresql+psycopg://finbot:finbot@localhost:5432/finbot",
+        repr=False,
+        validation_alias="DATABASE_URL",
+    )
+    notification_security_key: str = Field(
+        min_length=43,
+        max_length=43,
+        repr=False,
+        validation_alias="NOTIFICATION_SECURITY_KEY",
+    )
+    interval_seconds: int = Field(
+        default=60,
+        ge=5,
+        le=3600,
+        validation_alias="NOTIFICATION_SCHEDULER_INTERVAL_SECONDS",
+    )
+    log_level: str = "INFO"
+
+    @field_validator("database_url")
+    @classmethod
+    def validate_database_url(cls, value: str) -> str:
+        try:
+            url = make_url(value)
+        except Exception as exc:
+            raise ValueError("DATABASE_URL must be a valid SQLAlchemy URL") from exc
+        if url.drivername != "postgresql+psycopg" or not url.database or not url.username:
+            raise ValueError("DATABASE_URL must use postgresql+psycopg with user and database")
+        return value
+
+    @field_validator("notification_security_key", mode="before")
+    @classmethod
+    def reject_ambiguous_key(cls, value: object) -> object:
+        if type(value) is str and (
+            value != value.strip()
+            or any(ord(character) < 0x21 or ord(character) == 0x7F for character in value)
+        ):
+            raise ValueError("NOTIFICATION_SECURITY_KEY must use canonical text")
+        return value
+
+    @field_validator("notification_security_key")
+    @classmethod
+    def validate_notification_security_key(cls, value: str) -> str:
+        try:
+            decoded = base64.urlsafe_b64decode(value + "=")
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError(
+                "NOTIFICATION_SECURITY_KEY must encode exactly 32 random bytes"
+            ) from exc
+        canonical = base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii")
+        if len(decoded) != 32 or canonical != value:
+            raise ValueError("NOTIFICATION_SECURITY_KEY must encode exactly 32 random bytes")
+        return value
+
+    @property
+    def notification_key_bytes(self) -> bytes:
+        return base64.urlsafe_b64decode(self.notification_security_key + "=")
+
+    @classmethod
+    def from_secret_or_env(cls) -> NotificationSchedulerSettings:
+        values: dict[str, object] = {}
+        for key, path in (
+            ("database_url", "/run/secrets/database_url"),
+            ("notification_security_key", "/run/secrets/notification_security_key"),
+        ):
+            secret = Path(path)
+            if secret.is_file():
+                values[key] = secret.read_text(encoding="utf-8").strip()
+        return cls.model_validate(values)
+
+
+class NotificationDeliverySettings(BaseSettings):
+    """Standalone Telegram delivery settings with an intentionally narrow schema."""
+
+    model_config = SettingsConfigDict(
+        env_file=None,
+        extra="ignore",
+        hide_input_in_errors=True,
+        populate_by_name=True,
+        str_strip_whitespace=True,
+    )
+    telegram_bot_token: str = Field(
+        min_length=1,
+        repr=False,
+        validation_alias="TELEGRAM_BOT_TOKEN",
+    )
+    owner_telegram_user_id: int = Field(
+        gt=0,
+        le=_MAX_TELEGRAM_USER_ID,
+        repr=False,
+        validation_alias="OWNER_TELEGRAM_USER_ID",
+    )
+    telegram_allowed_user_ids: Annotated[tuple[int, ...] | None, NoDecode] = Field(
+        default=None,
+        repr=False,
+        validation_alias="TELEGRAM_ALLOWED_USER_IDS",
+    )
+    database_url: str = Field(
+        default="postgresql+psycopg://finbot:finbot@localhost:5432/finbot",
+        repr=False,
+        validation_alias="DATABASE_URL",
+    )
+
+    interval_seconds: int = Field(
+        default=10,
+        ge=5,
+        le=3600,
+        validation_alias="NOTIFICATION_DELIVERY_INTERVAL_SECONDS",
+    )
+    log_level: str = "INFO"
+
+    @field_validator("telegram_allowed_user_ids", mode="before")
+    @classmethod
+    def validate_telegram_allowed_user_ids(cls, value: object) -> object:
+        if value is None:
+            return None
+        if type(value) is str:
+            if value == "":
+                return None
+            if len(value) > _MAX_TELEGRAM_ALLOWLIST_TEXT_LENGTH:
+                raise ValueError(_TELEGRAM_ALLOWLIST_ERROR)
+            components = value.split(",")
+            if any(
+                not component
+                or not component.isascii()
+                or not component.isdecimal()
+                or (len(component) > 1 and component.startswith("0"))
+                for component in components
+            ):
+                raise ValueError(_TELEGRAM_ALLOWLIST_ERROR)
+            user_ids = tuple(int(component) for component in components)
+        elif isinstance(value, (list, tuple)):
+            if any(type(user_id) is not int for user_id in value):
+                raise ValueError(_TELEGRAM_ALLOWLIST_ERROR)
+            user_ids = tuple(value)
+        else:
+            raise ValueError(_TELEGRAM_ALLOWLIST_ERROR)
+        if (
+            not 1 <= len(user_ids) <= _MAX_ALLOWED_TELEGRAM_USERS
+            or any(not 1 <= user_id <= _MAX_TELEGRAM_USER_ID for user_id in user_ids)
+            or len(set(user_ids)) != len(user_ids)
+        ):
+            raise ValueError(_TELEGRAM_ALLOWLIST_ERROR)
+        return user_ids
+
+    @field_validator("database_url")
+    @classmethod
+    def validate_database_url(cls, value: str) -> str:
+        try:
+            url = make_url(value)
+        except Exception as exc:
+            raise ValueError("DATABASE_URL must be a valid SQLAlchemy URL") from exc
+        if url.drivername != "postgresql+psycopg" or not url.database or not url.username:
+            raise ValueError("DATABASE_URL must use postgresql+psycopg with user and database")
+        return value
+
+    @model_validator(mode="after")
+    def require_primary_owner_in_telegram_allowlist(self) -> Self:
+        if (
+            self.telegram_allowed_user_ids is not None
+            and self.owner_telegram_user_id not in self.telegram_allowed_user_ids
+        ):
+            raise ValueError("TELEGRAM_ALLOWED_USER_IDS must include OWNER_TELEGRAM_USER_ID")
+        return self
+
+    @property
+    def effective_telegram_user_ids(self) -> frozenset[int]:
+        configured = self.telegram_allowed_user_ids
+        if configured is None:
+            return frozenset((self.owner_telegram_user_id,))
+        return frozenset(configured)
+
+    @classmethod
+    def from_secret_or_env(cls) -> NotificationDeliverySettings:
+        values: dict[str, object] = {}
+        for key, path in (
+            ("telegram_bot_token", "/run/secrets/telegram_bot_token"),
+            ("database_url", "/run/secrets/database_url"),
+        ):
+            secret = Path(path)
+            if secret.is_file():
+                values[key] = secret.read_text(encoding="utf-8").strip()
+        return cls.model_validate(values)

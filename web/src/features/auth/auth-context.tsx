@@ -16,6 +16,7 @@ interface AuthContextValue {
   readonly state: AuthState;
   readonly telegram: TelegramMiniAppPort;
   logout(): Promise<void>;
+  refreshSession(): Promise<AuthState>;
   closeMiniApp(): void;
 }
 
@@ -113,6 +114,9 @@ export function AuthProvider({ coordinator, telegram, children }: AuthProviderPr
       telegram,
       async logout(): Promise<void> {
         await coordinator.logout();
+      },
+      async refreshSession(): Promise<AuthState> {
+        return coordinator.refreshAuthenticatedSession();
       },
       closeMiniApp(): void {
         coordinator.closeMiniApp();

@@ -6,7 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
 from finbot.adapters.database.models import Account, Category, Transaction
-from finbot.application.dto import DeletedTransactionCursor, TransactionCursor
+from finbot.application.dto import (
+    EMPTY_TRANSACTION_LIST_FILTERS,
+    DeletedTransactionCursor,
+    TransactionCursor,
+    TransactionListFilters,
+)
 from finbot.application.queries.transactions import TransactionDetails
 
 DetailRow = Row[tuple[Transaction, str, str, str]]
@@ -86,10 +91,24 @@ async def list_transaction_details_after(
     *,
     cursor: TransactionCursor | None,
     limit: int,
+    filters: TransactionListFilters = EMPTY_TRANSACTION_LIST_FILTERS,
 ) -> list[TransactionDetails]:
     if type(limit) is not int or not 1 <= limit <= 101:
         raise ValueError("Cursor query limit must be between 1 and 101")
     query = _base_query(user_id).where(Transaction.deleted_at.is_(None))
+    if filters.start is not None and filters.end is not None:
+        query = query.where(
+            Transaction.occurred_at >= filters.start,
+            Transaction.occurred_at < filters.end,
+        )
+    if filters.kind is not None:
+        query = query.where(Transaction.type == filters.kind.value)
+    if filters.account_id is not None:
+        query = query.where(Transaction.account_id == filters.account_id)
+    if filters.category_id is not None:
+        query = query.where(Transaction.category_id == filters.category_id)
+    if filters.currency is not None:
+        query = query.where(Transaction.currency == filters.currency)
     if cursor is not None:
         query = query.where(
             or_(

@@ -1,7 +1,6 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from html import escape
-from string import hexdigits
 from typing import Protocol
 from uuid import UUID
 
@@ -21,8 +20,9 @@ from finbot.adapters.telegram.executor import (
     TelegramMutationRequest,
     TelegramMutationSession,
 )
-from finbot.adapters.telegram.ui import TIMEZONES, settings_text_input_keyboard, timezone_token
+from finbot.adapters.telegram.ui import TIMEZONES, settings_text_input_keyboard
 from finbot.application.settings_mutations import (
+    MAX_SETTINGS_VERSION,
     BeginAccountCreateCommand,
     BeginAccountRenameCommand,
     BeginCategoryCreateCommand,
@@ -50,17 +50,17 @@ class StaleSettingsTimezoneCallback(SettingsQueryError):
 @dataclass(frozen=True, slots=True)
 class SettingsTimezoneTarget:
     timezone: str = field(repr=False)
-    expected_token: str = field(repr=False)
+    expected_version: int = field(repr=False)
 
     def __post_init__(self) -> None:
         if self.timezone not in {item[0] for item in TIMEZONES}:
             raise ValueError("Settings timezone target is not supported")
         if (
-            len(self.expected_token) != 16
-            or self.expected_token.lower() != self.expected_token
-            or any(character not in hexdigits.lower() for character in self.expected_token)
+            isinstance(self.expected_version, bool)
+            or not isinstance(self.expected_version, int)
+            or not 1 <= self.expected_version <= MAX_SETTINGS_VERSION
         ):
-            raise ValueError("Settings timezone token is invalid")
+            raise ValueError("Settings version is invalid")
 
 
 def parse_settings_timezone_callback(data: str) -> SettingsTimezoneTarget:
@@ -69,11 +69,19 @@ def parse_settings_timezone_callback(data: str) -> SettingsTimezoneTarget:
         raise InvalidSettingsMutationCallback("Кнопка повреждена")
     try:
         encoded = data.encode("ascii")
-        index_token, expected_token = data[len(prefix) :].split(":", 1)
-        if len(encoded) > 64 or not index_token.isdecimal() or str(int(index_token)) != index_token:
+        index_token, version_token = data[len(prefix) :].split(":", 1)
+        if (
+            len(encoded) > 64
+            or not index_token.isascii()
+            or not index_token.isdecimal()
+            or str(int(index_token)) != index_token
+            or not version_token.isascii()
+            or not version_token.isdecimal()
+            or str(int(version_token)) != version_token
+        ):
             raise ValueError
         timezone = TIMEZONES[int(index_token)][0]
-        return SettingsTimezoneTarget(timezone, expected_token)
+        return SettingsTimezoneTarget(timezone, int(version_token))
     except (UnicodeEncodeError, ValueError, IndexError) as error:
         raise InvalidSettingsMutationCallback("Кнопка повреждена") from error
 
@@ -273,12 +281,12 @@ class SettingsMutationController:
         ) -> SettingsMainSnapshot:
             reader = self._readers(session)
             current = await GetOwnerSettings(reader)(owner_id)
-            if timezone_token(current.timezone) != target.expected_token:
+            if current.settings_version != target.expected_version:
                 raise StaleSettingsTimezoneCallback(
                     "Часовой пояс уже изменился. Обновите настройки"
                 )
             owner = await self._use_cases(session).change_timezone.execute(
-                ChangeTimezoneCommand(owner_id, current.timezone, target.timezone)
+                ChangeTimezoneCommand(owner_id, target.expected_version, target.timezone)
             )
             active = await self._drafts(session).get_active(owner_id)
             if active is not None and active.state.startswith("settings_"):

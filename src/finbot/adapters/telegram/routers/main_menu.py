@@ -79,7 +79,8 @@ class MainMenuRouter:
             self.help_menu,
             F.text.in_({"❓ Помощь", "❓ Как пользоваться", "❓ Справка"}),
         )
-        observer.register(self.quick_help, F.text.in_({"⚡ Быстрый ввод", "➕ Добавить"}))
+        observer.register(self.quick_help, F.text.in_({"⚡ Быстрый ввод"}))
+        observer.register(self.more_menu, F.text.in_({"••• Ещё", "⋯ Ещё"}))
 
     async def _open(
         self,
@@ -121,6 +122,9 @@ class MainMenuRouter:
 
     async def quick_help(self, message: Message, finbot_update_id: int | None = None) -> None:
         await self._open(message, finbot_update_id, MainMenuAction.QUICK_HELP)
+
+    async def more_menu(self, message: Message, finbot_update_id: int | None = None) -> None:
+        await self._open(message, finbot_update_id, MainMenuAction.MORE)
 
 
 __all__ = [

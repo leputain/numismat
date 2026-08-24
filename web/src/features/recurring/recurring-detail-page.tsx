@@ -20,6 +20,7 @@ import { emitClientEvent } from "../../shared/logging/client-events";
 import { usePreparedMutation } from "../../shared/mutations/prepared-mutation";
 import { restartRecurringPagination } from "../../shared/mutations/query-recovery";
 import { queryKeys } from "../../shared/queries/query-keys";
+import { draftPathWithReturn } from "../../shared/navigation/draft-return";
 import {
   formatNominalLocal,
   recurringCadenceLabel,
@@ -62,7 +63,7 @@ function InstanceRow({ instance, run, pending }: {
             <Link className="button button--ghost" to={`/transactions/${instance.transaction_id}`}>Операция</Link>
           )}
           {instance.draft_id === null ? null : (
-            <Link className="button button--ghost" to="/draft">Проверить</Link>
+            <Link className="button button--ghost" to={draftPathWithReturn({ kind: "recurring", scheduleId: instance.schedule_id })}>Проверить</Link>
           )}
           {instance.status === "blocked" ? (
             <button className="button button--secondary" disabled={pending} onClick={() => run({ action: "retry", instance })} type="button">Повторить</button>

@@ -468,6 +468,123 @@ async def test_select_type_uses_closed_kind_and_resolves_review_fallback_categor
 
 
 @pytest.mark.asyncio
+async def test_amount_only_type_selection_skips_amount_and_loads_category_choices() -> None:
+    payload = {
+        "flow": "quick",
+        "input_mode": "amount_only",
+        "amount_minor": 50_050,
+    }
+    use_cases, repository, queries, draft = await _subject("wizard_type", payload=payload)
+
+    result = await use_cases.execute(
+        DraftNavigationCommand(
+            OWNER_ID,
+            draft.ref,
+            DraftNavigationAction.SELECT_TYPE,
+            TransactionType.EXPENSE,
+        )
+    )
+
+    assert result.draft is not None
+    assert result.draft.state == "wizard_category"
+    assert result.draft.payload == {
+        "flow": "quick",
+        "input_mode": "amount_only",
+        "amount_minor": 50_050,
+        "type": "expense",
+    }
+    assert result.choices.categories == queries.categories
+    assert queries.category_calls == [TransactionType.EXPENSE]
+    assert repository.mutations == ["update"]
+
+
+@pytest.mark.asyncio
+async def test_amount_only_advances_through_the_full_guided_review_path() -> None:
+    use_cases, repository, _queries, draft = await _subject(
+        "wizard_type",
+        payload={
+            "flow": "quick",
+            "input_mode": "amount_only",
+            "amount_minor": 50_050,
+        },
+    )
+
+    transitions = (
+        (DraftNavigationAction.SELECT_TYPE, TransactionType.EXPENSE, "wizard_category"),
+        (
+            DraftNavigationAction.SELECT_CATEGORY,
+            DraftCatalogRef(CATEGORY_ID, 5),
+            "wizard_account",
+        ),
+        (
+            DraftNavigationAction.SELECT_ACCOUNT,
+            DraftCatalogRef(ACCOUNT_ID, 4),
+            "wizard_date",
+        ),
+        (DraftNavigationAction.SELECT_DATE, DraftDateChoice.TODAY, "wizard_description"),
+        (DraftNavigationAction.SKIP_DESCRIPTION, None, "wizard_confirm"),
+    )
+    current = draft
+    for action, choice, expected_state in transitions:
+        result = await use_cases.execute(
+            DraftNavigationCommand(OWNER_ID, current.ref, action, choice)
+        )
+        assert result.draft is not None
+        assert result.draft.state == expected_state
+        assert result.draft.payload["amount_minor"] == 50_050
+        current = result.draft
+
+    assert current.payload["description"] == ""
+    assert current.payload["currency"] == "RUB"
+    assert repository.mutations == ["update"] * 5
+
+
+@pytest.mark.asyncio
+async def test_amount_only_category_back_returns_to_type_and_preserves_amount() -> None:
+    payload = {
+        "flow": "quick",
+        "input_mode": "amount_only",
+        "amount_minor": 50_050,
+        "type": "expense",
+    }
+    use_cases, repository, _queries, draft = await _subject(
+        "wizard_category",
+        payload=payload,
+    )
+
+    result = await use_cases.execute(
+        DraftNavigationCommand(OWNER_ID, draft.ref, DraftNavigationAction.BACK)
+    )
+
+    assert result.draft is not None
+    assert result.draft.state == "wizard_type"
+    assert result.draft.payload == {
+        "flow": "quick",
+        "input_mode": "amount_only",
+        "amount_minor": 50_050,
+    }
+    assert repository.mutations == ["update"]
+
+
+@pytest.mark.asyncio
+async def test_amount_only_marker_without_amount_fails_closed_without_mutation() -> None:
+    payload = {"flow": "quick", "input_mode": "amount_only"}
+    use_cases, repository, _queries, draft = await _subject("wizard_type", payload=payload)
+
+    with pytest.raises(InvalidStateError, match="не содержит сумму"):
+        await use_cases.execute(
+            DraftNavigationCommand(
+                OWNER_ID,
+                draft.ref,
+                DraftNavigationAction.SELECT_TYPE,
+                TransactionType.EXPENSE,
+            )
+        )
+
+    assert repository.mutations == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("state", "target"),
     [

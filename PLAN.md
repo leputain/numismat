@@ -1,6 +1,6 @@
 # Plan
 
-Последнее обновление: 2026-08-20.
+Последнее обновление: 2026-08-24.
 
 Статус ниже в основном описывает состояние файлов checkout; live-состояние указывается только отдельными датированными
 пунктами. Итоговый baseline M0/M1 handoff gate ранее выполнен на изолированных test-контейнерах, включая
@@ -57,6 +57,37 @@ release gate и 2026-08-20 развёрнут в production в singleton fallbac
   provisioning и coordinated bot/API/runner/web rollout прошли успешно.
 - [x] Public smoke подтвердил `63` OpenAPI paths, `66` bound operations, signed primary-owner login, stale-binding
   rejection без `Set-Cookie`, safe invalid mutation без доменной записи, server-side logout и healthy live/readiness.
+
+## Quick capture и control of spending — 2026-08-24
+
+- [x] Strict amount-only classifier принимает только каноническую положительную сумму, не использует
+  `float` и передаёт `amount_minor` в тот же persistent quick-draft.
+- [x] Amount-only Telegram flow проходит type → category → account → date → description → review, показывает
+  `1/5`…`5/5`, не спрашивает сумму повторно и сохраняет её при Back из категории.
+- [x] Existing typed-text arbitration, one-active-draft, pending intent, Replace/Keep/Resume, optimistic revision,
+  durable outbox, bank-import block и review-only confirm boundary переиспользуются без новой миграции.
+- [x] `POST /api/v1/drafts/quick` и `POST /api/v1/drafts/compose` используют shared mutation envelope;
+  compose создаёт только review draft и повторно проверяет owner-owned catalog references.
+- [x] Mini App открывает quick capture как основной add-screen, показывает три последние операции,
+  даёт review-first Repeat и оставляет full wizard/одноэкранную compose-форму дополнительными путями.
+- [x] Closed `returnKind` возвращает к bank-import/recurring source только по exact UUID; mobile
+  keyboard/sticky action и auto-focus не теряют текущий draft.
+- [x] Transaction filters ограничены периодом до 366 дней и owner-scoped type/account/category/currency;
+  cursor MAC связан с SHA-256 fingerprint фильтров, поэтому stale/mismatched pagination fail closed.
+- [x] Dashboard, accounts/categories и bank-import review пересобраны вокруг основных задач; import показывает
+  progress и переходит к следующей нерешённой строке.
+- [x] `0013_settings_version` и owner-locked `PUT /api/v1/settings/timezone` дают HTTP/Telegram numeric
+  optimistic version; base currency остаётся read-only.
+- [x] Budget progress выдаёт actual spent, known recurring, commitment-only forecast, safe daily и закрытое
+  `on_track/watch/over` отдельно по currency; UI не пересчитывает серверный status.
+- [x] `0014_notifications` даёт default-off owner settings, quiet hours, weekly schedule, keyed-digest dedupe,
+  lease recovery и bounded retry для budget 80/100%, recurring-ready и weekly digest. Scheduler и delivery изолированы
+  по секретам/сетям; queue не сохраняет суммы, currency, descriptions или message text.
+- [x] Полный release gate нового slice: frozen sync, Ruff/mypy/unit, OpenAPI/generated TypeScript,
+  PostgreSQL cross-channel/integration, migration roundtrip, Compose/images, audits и mobile visual QA.
+- [ ] Начальные балансы, переводы между собственными счетами и накопительные цели остаются
+  отдельным P3 после аудита ledger semantics; cross-user transfers, shared household, RBAC и self-registration
+  по-прежнему вне scope.
 
 ## Reliability и UX — 2026-08-12
 

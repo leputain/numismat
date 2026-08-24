@@ -79,8 +79,11 @@ describe("draft capture landing", () => {
     fireEvent.click(repeatButtons[0]!);
     expect(onRepeat).toHaveBeenCalledWith(transactions[0]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Открыть полный ввод" }));
+    fireEvent.click(screen.getByRole("button", { name: "Пошаговый ввод" }));
     expect(onStartWizard).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("link", { name: "Все поля сразу" }).getAttribute("href")).toBe(
+      "/draft/compose",
+    );
     expect(screen.getByRole("button", { name: "Продолжить" }).closest("[data-mobile-sticky='true']")).not.toBeNull();
     expect(screen.getByText(/Ничего не сохранится без проверки/u)).not.toBeNull();
   });

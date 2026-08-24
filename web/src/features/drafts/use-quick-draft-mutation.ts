@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 
-import type { MutationResponse } from "../../shared/api/types";
+import type { MutationResponse, QuickDraftRequest } from "../../shared/api/types";
 import { isOptimisticConflict } from "../../shared/errors/user-message";
 import { emitClientEvent } from "../../shared/logging/client-events";
 import { usePreparedMutation } from "../../shared/mutations/prepared-mutation";
@@ -41,9 +41,10 @@ export function useQuickDraftMutation(options: QuickDraftMutationOptions = {}) {
     outcomeUnknown: mutation.outcomeUnknown,
     retryUnknown: mutation.retryUnknown,
     submit(text: string): void {
+      const body: QuickDraftRequest = { text };
       mutation.run({
         path: "/api/v1/drafts/quick",
-        body: { text },
+        body,
         context: "quick",
       });
     },

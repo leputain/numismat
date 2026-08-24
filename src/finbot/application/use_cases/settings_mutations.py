@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from finbot.application.dto import CreateDraftCommand, OwnerSnapshot
 from finbot.application.errors import ApplicationValidationError
 from finbot.application.settings_mutations import (
+    MAX_SETTINGS_VERSION,
     BeginAccountCreateCommand,
     BeginAccountRenameCommand,
     BeginCategoryCreateCommand,
@@ -142,15 +143,21 @@ class ChangeSettingsTimezone:
         self._repository = repository
 
     async def execute(self, command: ChangeTimezoneCommand) -> OwnerSnapshot:
+        if command.expected_version >= MAX_SETTINGS_VERSION:
+            raise ApplicationValidationError("Достигнут предел версий настроек")
         try:
             ZoneInfo(command.timezone)
         except (ZoneInfoNotFoundError, ValueError) as error:
             raise ApplicationValidationError("Неизвестный часовой пояс") from error
         owner = await self._repository.change_timezone(
             command.owner_id,
-            command.expected_timezone,
+            command.expected_version,
             command.timezone,
         )
-        if owner.owner_id != command.owner_id or owner.timezone != command.timezone:
+        if (
+            owner.owner_id != command.owner_id
+            or owner.timezone != command.timezone
+            or owner.settings_version != command.expected_version + 1
+        ):
             raise ApplicationValidationError("Результат смены часового пояса повреждён")
         return owner

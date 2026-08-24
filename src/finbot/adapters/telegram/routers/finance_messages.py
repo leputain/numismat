@@ -58,14 +58,14 @@ class FinanceMessageRouter:
         observer.register(self.start_wizard, Command("wizard"))
         observer.register(
             self.start_wizard,
-            F.text.in_({"➕ Добавить операцию", "➕ Новая операция", "🧙 Мастер"}),
+            F.text.in_({"➕ Добавить", "➕ Добавить операцию", "➕ Новая операция", "🧙 Мастер"}),
         )
         observer.register(self.report, Command("today", "month"))
         observer.register(self.report, F.text.in_({"📅 Сегодня", "📊 Месяц"}))
         observer.register(self.history, Command("last"))
         observer.register(
             self.history,
-            F.text.in_({"🧾 Все операции", "🧾 История", "🧾 Последние"}),
+            F.text.in_({"🧾 Операции", "🧾 Все операции", "🧾 История", "🧾 Последние"}),
         )
         if self.budget_queries is not None and self.budget_context is not None:
             observer.register(self.budgets, Command("budgets"))

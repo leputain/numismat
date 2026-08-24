@@ -4,6 +4,9 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
+from finbot.application.draft_composition import (
+    DraftComposePreparer,
+)
 from finbot.application.draft_conflicts import PendingQuickIntent
 from finbot.application.draft_navigation import DRAFT_NAVIGATION_ALLOWED_STATES
 from finbot.application.draft_preparation import (
@@ -61,6 +64,7 @@ QUICK_DRAFT_INGRESS_CONFLICT_STATES = frozenset(
 class DraftIngressOperation(StrEnum):
     WIZARD = "wizard"
     QUICK = "quick"
+    COMPOSE = "compose"
     REPEAT = "repeat"
     LOCAL_AI = "local_ai"
 
@@ -162,6 +166,9 @@ class DraftIngressClock(Protocol):
 
 class DraftIngressQuickPreparer(Protocol):
     async def execute(self, command: PrepareQuickDraftCommand) -> PreparedDraftResult: ...
+
+
+type DraftIngressComposePreparer = DraftComposePreparer
 
 
 class QuickDraftIngressNotApplicableError(InvalidStateError):

@@ -30,7 +30,6 @@ from finbot.adapters.telegram.ui import (
     settings_keyboard,
     settings_text_input_keyboard,
     settings_timezones_keyboard,
-    timezone_token,
     transaction_keyboard,
     wizard_confirm_keyboard,
     wizard_date_keyboard,
@@ -98,10 +97,11 @@ def test_callback_data_is_compact_and_contains_no_financial_data() -> None:
 
 def test_main_menu_has_clear_primary_action() -> None:
     labels = [button.text for row in MAIN_MENU.keyboard for button in row]
-    assert labels[0] == "➕ Добавить операцию"
+    assert labels[0] == "➕ Добавить"
     assert "⚡ Быстрый ввод" not in labels
-    assert "🧾 Все операции" in labels
-    assert "⚙️ Настройки" in labels
+    assert "🧾 Операции" in labels
+    assert "••• Ещё" in labels
+    assert "⚙️ Настройки" not in labels
     assert MAIN_MENU.is_persistent is True
     assert MAIN_MENU.one_time_keyboard is not True
 
@@ -314,9 +314,9 @@ def test_settings_discard_is_bound_to_the_current_draft() -> None:
     assert (input_discard.draft_id, input_discard.revision) == (draft_id, 8)
 
 
-def test_timezone_buttons_are_bound_to_the_rendered_timezone() -> None:
-    callbacks = _callback_values(settings_timezones_keyboard("Europe/Moscow"))
-    assert f"s:timezone:0:{timezone_token('Europe/Moscow')}" in callbacks
+def test_timezone_buttons_are_bound_to_the_rendered_settings_version() -> None:
+    callbacks = _callback_values(settings_timezones_keyboard("Europe/Moscow", 17))
+    assert "s:timezone:0:17" in callbacks
 
 
 def test_catalog_names_are_normalized_and_validated() -> None:

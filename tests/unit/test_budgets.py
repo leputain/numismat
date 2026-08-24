@@ -8,6 +8,7 @@ from finbot.adapters.http.budgets.cursor import (
     BudgetCursorCodec,
     InvalidBudgetCursorError,
 )
+from finbot.adapters.http.schemas.budgets import budget_response
 from finbot.application.budgets import (
     BudgetCursor,
     BudgetCursorItem,
@@ -17,8 +18,11 @@ from finbot.application.budgets import (
 from finbot.application.use_cases.budgets import ListBudgetProgress
 from finbot.domain.budgets import (
     BudgetDefinition,
+    BudgetForecastState,
     budget_period_bounds,
+    calculate_budget_forecast,
     calculate_budget_progress,
+    remaining_budget_days,
     validate_budget_period,
 )
 
@@ -52,7 +56,9 @@ class _BudgetReader:
         self.rows = rows
         self.fetch_limit: int | None = None
         self.aggregate_calls = 0
+        self.recurring_calls = 0
         self.windows: tuple[BudgetSpendWindow, ...] = ()
+        self.forecast_windows: tuple[BudgetSpendWindow, ...] = ()
 
     async def get(self, owner_id: UUID, budget_id: UUID) -> BudgetSnapshot | None:
         return next(
@@ -90,6 +96,16 @@ class _BudgetReader:
         self.windows = windows
         return {window.budget_id: index * 100 for index, window in enumerate(windows, 1)}
 
+    async def known_recurring_minor_for_budgets(
+        self,
+        owner_id: UUID,
+        windows: tuple[BudgetSpendWindow, ...],
+    ) -> dict[UUID, int]:
+        assert owner_id == OWNER_ID
+        self.recurring_calls += 1
+        self.forecast_windows = windows
+        return {window.budget_id: index * 300 for index, window in enumerate(windows, 1)}
+
 
 def test_budget_domain_uses_local_half_open_periods_and_integer_progress() -> None:
     start, end = budget_period_bounds(
@@ -103,6 +119,39 @@ def test_budget_domain_uses_local_half_open_periods_and_integer_progress() -> No
     assert calculate_budget_progress(1_000, 1_250).progress_bps == 10_000
     with pytest.raises(ValueError, match="границы"):
         validate_budget_period(date.max, date.max)
+
+
+def test_budget_forecast_is_commitment_only_integer_math_with_explicit_states() -> None:
+    on_track = calculate_budget_forecast(1_000, 200, 300, 7)
+    below_watch = calculate_budget_forecast(1_000, 499, 300, 3)
+    watch = calculate_budget_forecast(1_000, 500, 300, 3)
+    over = calculate_budget_forecast(1_000, 1_001, 0, 0)
+
+    assert (on_track.forecast_minor, on_track.safe_daily_minor, on_track.state) == (
+        500,
+        71,
+        BudgetForecastState.ON_TRACK,
+    )
+    assert (watch.forecast_minor, watch.safe_daily_minor, watch.state) == (
+        800,
+        66,
+        BudgetForecastState.WATCH,
+    )
+    assert below_watch.state is BudgetForecastState.ON_TRACK
+    assert (over.forecast_minor, over.safe_daily_minor, over.state) == (
+        1_001,
+        0,
+        BudgetForecastState.OVER,
+    )
+    assert (
+        remaining_budget_days(
+            date(2026, 8, 1),
+            date(2026, 8, 31),
+            "Europe/Moscow",
+            datetime(2026, 8, 14, 21, 30, tzinfo=UTC),
+        )
+        == 17
+    )
 
 
 @pytest.mark.asyncio
@@ -132,8 +181,25 @@ async def test_budget_list_fetches_lookahead_then_aggregates_selected_page_once(
 
     assert reader.fetch_limit == 3
     assert reader.aggregate_calls == 1
+    assert reader.recurring_calls == 1
     assert len(reader.windows) == 2
+    assert len(reader.forecast_windows) == 2
+    assert all(
+        window.start == datetime(2026, 8, 14, 12, tzinfo=UTC) for window in reader.forecast_windows
+    )
     assert tuple(item.progress.spent_minor for item in page.items) == (100, 200)
+    assert tuple(item.known_recurring_minor for item in page.items) == (300, 600)
+    assert tuple(item.forecast_minor for item in page.items) == (400, 800)
+    assert tuple(item.safe_daily_minor for item in page.items) == (33, 11)
+    assert tuple(item.state for item in page.items) == (
+        BudgetForecastState.ON_TRACK,
+        BudgetForecastState.WATCH,
+    )
+    response = budget_response(page.items[0])
+    assert response.progress.known_recurring_minor == "300"
+    assert response.progress.safe_daily_minor == "33"
+    assert response.progress.forecast_minor == "400"
+    assert response.progress.state == "on_track"
     assert page.next_cursor == rows[1].cursor
 
 

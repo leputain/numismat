@@ -124,6 +124,18 @@ async def test_untracked_wizard_delivers_only_after_controller_returns_receipt()
 
 
 @pytest.mark.asyncio
+async def test_compact_add_button_starts_the_existing_review_first_wizard() -> None:
+    events: list[object] = []
+    receipt = cast(DraftIngressReceiptSnapshot, object())
+    router, _draft, _finance = _router(events, draft_receipt=receipt)
+
+    await router.start_wizard(_message("➕ Добавить"), None)
+
+    assert events[1][0] == "wizard"
+    assert events[2] == ("deliver_draft", 700, receipt)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("update_id", "receipt"), [(91, object()), (None, None)])
 async def test_wizard_tracked_or_duplicate_result_skips_direct_delivery(
     update_id: int | None,
@@ -216,6 +228,17 @@ async def test_untracked_history_calls_shared_delivery_with_controller_receipt()
         ("history", cast(Any, events[1][1])),
         ("deliver_finance", 700, receipt),
     ]
+
+
+@pytest.mark.asyncio
+async def test_compact_operations_button_opens_history() -> None:
+    events: list[object] = []
+    receipt = TelegramQueryReceipt("history")
+    router, _draft, _finance = _router(events, finance_receipt=receipt)
+
+    await router.history(_message("🧾 Операции"), None)
+
+    assert events[1][0] == "history"
 
 
 def test_registration_is_ordered_and_performs_no_handler_work() -> None:

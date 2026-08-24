@@ -571,7 +571,7 @@ async def test_archive_lists_and_timezone_listing_do_not_bypass_owner_scope(
     assert timezones is receipts[0]
     keyboard = str(timezones.reply_markup.model_dump())
     assert "✓ Москва · UTC+3" in keyboard
-    assert "s:timezone:1:" in keyboard
+    assert "s:timezone:1:1" in keyboard
     owner_index = max(index for index, event in enumerate(events) if event == "query.owner")
     outbox_index = max(index for index, event in enumerate(events) if event == "outbox")
     commit_index = max(index for index, event in enumerate(events) if event == "commit")

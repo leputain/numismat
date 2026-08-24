@@ -47,6 +47,10 @@ describe("protected route shell semantics", () => {
     expect(protectedBackDestination("/recurring/one/edit")).toBe("/recurring/one");
     expect(protectedBackDestination("/imports/one")).toBe("/imports");
     expect(protectedBackDestination("/rates/one/publish")).toBe("/rates/one");
+    expect(protectedBackDestination("/draft/compose")).toBe("/draft");
+    expect(protectedBackDestination("/accounts")).toBe("/more");
+    expect(protectedBackDestination("/categories")).toBe("/more");
+    expect(protectedBackDestination("/settings")).toBe("/more");
     expect(protectedBackDestination("/analytics")).toBeNull();
   });
 });

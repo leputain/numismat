@@ -3,7 +3,12 @@ from datetime import date, datetime
 from typing import Protocol
 from uuid import UUID
 
-from finbot.domain.budgets import BudgetDefinition, BudgetProgress, validate_budget_currency
+from finbot.domain.budgets import (
+    BudgetDefinition,
+    BudgetForecastState,
+    BudgetProgress,
+    validate_budget_currency,
+)
 
 MAX_BUDGET_PAGE_SIZE = 50
 
@@ -59,6 +64,10 @@ class BudgetSnapshot:
 class BudgetProgressSnapshot:
     budget: BudgetSnapshot = field(repr=False)
     progress: BudgetProgress = field(repr=False)
+    known_recurring_minor: int = field(repr=False)
+    safe_daily_minor: int = field(repr=False)
+    forecast_minor: int = field(repr=False)
+    state: BudgetForecastState
     measured_at: datetime = field(repr=False)
     cutoff_at: datetime = field(repr=False)
 
@@ -67,6 +76,17 @@ class BudgetProgressSnapshot:
             raise ValueError("Budget progress timestamp must contain a timezone")
         if not _is_aware_datetime(self.cutoff_at):
             raise ValueError("Budget progress cutoff must contain a timezone")
+        for value in (
+            self.known_recurring_minor,
+            self.safe_daily_minor,
+            self.forecast_minor,
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("Budget forecast value must be non-negative")
+        if self.forecast_minor != self.progress.spent_minor + self.known_recurring_minor:
+            raise ValueError("Budget forecast does not match spent and recurring amounts")
+        if not isinstance(self.state, BudgetForecastState):
+            raise ValueError("Budget forecast state is invalid")
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -177,3 +197,11 @@ class BudgetReader(Protocol):
         owner_id: UUID,
         windows: tuple[BudgetSpendWindow, ...],
     ) -> dict[UUID, int]: ...
+
+    async def known_recurring_minor_for_budgets(
+        self,
+        owner_id: UUID,
+        windows: tuple[BudgetSpendWindow, ...],
+    ) -> dict[UUID, int]:
+        """Aggregate unresolved instances plus not-yet-materialized active occurrences."""
+        ...

@@ -67,6 +67,7 @@ describe("installAuthPageLifecycle", () => {
         locale: "ru",
         timezone: "Europe/Moscow",
         baseCurrency: "RUB",
+        settingsVersion: 1,
         expiresAt: "2030-01-01T00:00:00Z",
       },
     };

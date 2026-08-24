@@ -54,6 +54,15 @@ class OwnerSnapshot:
     base_currency: str = field(repr=False)
     default_account_id: UUID | None = field(repr=False)
     fast_mode: bool = field(default=False, repr=False)
+    settings_version: int = field(default=1, repr=False)
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.settings_version, bool)
+            or not isinstance(self.settings_version, int)
+            or not 1 <= self.settings_version <= 2**31 - 1
+        ):
+            raise ValueError("Owner settings version must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,6 +357,55 @@ class TransactionPageSnapshot:
         if self.total == 0:
             return 0
         return (self.total + self.page_size - 1) // self.page_size
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class TransactionListFilters:
+    start: datetime | None = field(default=None, repr=False)
+    end: datetime | None = field(default=None, repr=False)
+    kind: TransactionType | None = field(default=None, repr=False)
+    account_id: UUID | None = field(default=None, repr=False)
+    category_id: UUID | None = field(default=None, repr=False)
+    currency: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if (self.start is None) != (self.end is None):
+            raise ValueError("Transaction filter period is incomplete")
+        if self.start is not None and self.end is not None:
+            if self.start.utcoffset() is None or self.end.utcoffset() is None:
+                raise ValueError("Transaction filter period must contain a timezone")
+            if self.start >= self.end:
+                raise ValueError("Transaction filter period is invalid")
+        if self.kind is not None and not isinstance(self.kind, TransactionType):
+            raise TypeError("Transaction filter type is invalid")
+        for entity_id in (self.account_id, self.category_id):
+            if entity_id is not None and not isinstance(entity_id, UUID):
+                raise TypeError("Transaction filter identifier is invalid")
+        if self.currency is not None and (
+            type(self.currency) is not str
+            or len(self.currency) != 3
+            or not self.currency.isascii()
+            or not self.currency.isalpha()
+            or self.currency != self.currency.upper()
+        ):
+            raise ValueError("Transaction filter currency is invalid")
+
+    @property
+    def is_empty(self) -> bool:
+        return all(
+            value is None
+            for value in (
+                self.start,
+                self.end,
+                self.kind,
+                self.account_id,
+                self.category_id,
+                self.currency,
+            )
+        )
+
+
+EMPTY_TRANSACTION_LIST_FILTERS = TransactionListFilters()
 
 
 @dataclass(frozen=True, slots=True, repr=False)

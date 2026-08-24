@@ -3,7 +3,7 @@ import os
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from finbot.adapters.database.models import Account, Category, Draft, User
@@ -30,6 +30,9 @@ async def _cleanup_owner(
     owner_id: UUID,
 ) -> None:
     async with factory() as session:
+        await session.execute(
+            update(User).where(User.id == owner_id).values(default_account_id=None)
+        )
         await session.execute(delete(Draft).where(Draft.user_id == owner_id))
         await session.execute(delete(Category).where(Category.user_id == owner_id))
         await session.execute(delete(Account).where(Account.user_id == owner_id))
@@ -57,9 +60,10 @@ async def test_catalog_mutation_and_exact_draft_delete_share_rollback_boundary()
 
     try:
         async with factory() as setup:
+            telegram_id = _synthetic_telegram_user_id()
             owner = User(
-                telegram_user_id=_synthetic_telegram_user_id(),
-                telegram_chat_id=_synthetic_telegram_user_id(),
+                telegram_user_id=telegram_id,
+                telegram_chat_id=telegram_id,
                 locale="ru",
                 timezone="Europe/Moscow",
                 base_currency="RUB",
@@ -120,8 +124,10 @@ async def test_concurrent_same_revision_rename_has_one_success_and_one_cas_failu
 
     try:
         async with factory() as setup:
+            telegram_id = _synthetic_telegram_user_id()
             owner = User(
-                telegram_user_id=_synthetic_telegram_user_id(),
+                telegram_user_id=telegram_id,
+                telegram_chat_id=telegram_id,
                 locale="ru",
                 timezone="Europe/Moscow",
                 base_currency="RUB",

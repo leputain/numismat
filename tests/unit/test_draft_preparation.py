@@ -12,10 +12,12 @@ from fakes.draft_preparation import (
 )
 
 from finbot.application.draft_preparation import (
+    AmountOnlyQuickDraft,
     DraftPreparationState,
     PreparedDraftResult,
     PrepareParsedDraftCommand,
     PrepareQuickDraftCommand,
+    SignedAmountOnlyQuickDraftError,
 )
 from finbot.application.dto import AccountSnapshot, CategorySnapshot, OwnerSnapshot
 from finbot.application.errors import ApplicationValidationError, EntityNotFoundError
@@ -231,6 +233,44 @@ async def test_prepare_quick_uses_owner_timezone_and_translates_parser_failure()
 
 
 @pytest.mark.asyncio
+async def test_prepare_quick_starts_amount_only_at_type_without_resolving_catalogs() -> None:
+    parser = StubQuickDraftParser(result=AmountOnlyQuickDraft(50_050))
+    owners = StubOwnerReader({OWNER_ID: _owner()})
+    parsed, catalogs, rules, clock = _harness(account=_account(), category=_category())
+
+    result = await PrepareQuickDraft(owners, parser, parsed).execute(
+        PrepareQuickDraftCommand(OWNER_ID, "500,50")
+    )
+
+    assert result.state is DraftPreparationState.TYPE_REQUIRED
+    assert dict(result.payload) == {
+        "flow": "quick",
+        "input_mode": "amount_only",
+        "amount_minor": 50_050,
+    }
+    assert parser.calls == [("500,50", "Europe/Moscow")]
+    assert catalogs.account_calls == []
+    assert catalogs.category_calls == []
+    assert rules.calls == []
+    assert clock.requested_timezones == []
+
+
+@pytest.mark.asyncio
+async def test_prepare_quick_translates_signed_amount_without_echoing_input() -> None:
+    parser = StubQuickDraftParser(error=SignedAmountOnlyQuickDraftError())
+    parsed, _catalogs, _rules, _clock = _harness(account=_account(), category=_category())
+
+    with pytest.raises(ApplicationValidationError, match="без знака") as caught:
+        await PrepareQuickDraft(
+            StubOwnerReader({OWNER_ID: _owner()}),
+            parser,
+            parsed,
+        ).execute(PrepareQuickDraftCommand(OWNER_ID, "-500"))
+
+    assert "-500" not in str(caught.value)
+
+
+@pytest.mark.asyncio
 async def test_ocr_preparer_reuses_the_shared_policy_with_an_ocr_flow() -> None:
     parsed, _catalogs, _rules, _clock = _harness(account=_account(), category=_category())
 
@@ -277,8 +317,9 @@ def test_preparation_contract_hides_sensitive_values_and_rejects_adapter_keys() 
         DraftPreparationState.REVIEW,
         {"amount_minor": 12_345, "description": "тайное описание"},
     )
+    amount_only = AmountOnlyQuickDraft(12_345)
 
-    for rendered in (repr(parsed_command), repr(quick_command), repr(result)):
+    for rendered in (repr(parsed_command), repr(quick_command), repr(result), repr(amount_only)):
         assert "12_345" not in rendered
         assert "123.45" not in rendered
         assert "тайн" not in rendered
@@ -293,3 +334,11 @@ def test_preparation_contract_hides_sensitive_values_and_rejects_adapter_keys() 
     ):
         with pytest.raises(ValueError, match="adapter state"):
             PreparedDraftResult(DraftPreparationState.REVIEW, {key: "adapter-only"})
+
+    for invalid in (
+        {"flow": "quick", "amount_minor": 12_345},
+        {"flow": "wizard", "input_mode": "amount_only", "amount_minor": 12_345},
+        {"flow": "quick", "input_mode": "amount_only", "amount_minor": 0},
+    ):
+        with pytest.raises(ValueError, match="Amount-only"):
+            PreparedDraftResult(DraftPreparationState.TYPE_REQUIRED, invalid)

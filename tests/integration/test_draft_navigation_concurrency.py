@@ -3,7 +3,7 @@ import os
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -63,7 +63,8 @@ async def _setup(
     factory: async_sessionmaker[AsyncSession],
 ) -> tuple[UUID, UUID, DraftRef]:
     async with factory() as session:
-        owner = User(telegram_user_id=_synthetic_telegram_user_id())
+        telegram_id = _synthetic_telegram_user_id()
+        owner = User(telegram_user_id=telegram_id, telegram_chat_id=telegram_id)
         session.add(owner)
         await session.flush()
         primary = Account(
@@ -110,6 +111,9 @@ async def _setup(
 
 async def _cleanup(engine: AsyncEngine, owner_id: UUID) -> None:
     async with engine.begin() as connection:
+        await connection.execute(
+            update(User).where(User.id == owner_id).values(default_account_id=None)
+        )
         await connection.execute(delete(Draft).where(Draft.user_id == owner_id))
         await connection.execute(delete(Category).where(Category.user_id == owner_id))
         await connection.execute(delete(Account).where(Account.user_id == owner_id))

@@ -17,7 +17,9 @@ import { emitClientEvent } from "../../shared/logging/client-events";
 import { usePreparedMutation } from "../../shared/mutations/prepared-mutation";
 import { restartBudgetPagination } from "../../shared/mutations/query-recovery";
 import { queryKeys } from "../../shared/queries/query-keys";
+import { BudgetProgressOverview } from "./budget-progress";
 import { formatBudgetDate } from "./budget-window";
+import { budgetTransactionsPath } from "../transactions/transaction-filter-model";
 
 type LifecycleAction = "delete" | "restore";
 
@@ -52,8 +54,6 @@ export function BudgetDetailPage({ budgetId }: { readonly budgetId: string }) {
 
   const value = budget.data;
   const deleted = value.deleted_at !== null;
-  const progress = value.progress;
-  const overspent = progress.overspent_minor !== "0";
 
   const runLifecycle = (action: LifecycleAction) => {
     const body: VersionedBudgetRequest = { version: value.version };
@@ -79,51 +79,29 @@ export function BudgetDetailPage({ budgetId }: { readonly budgetId: string }) {
         title={value.name}
       />
 
-      <section className="surface-panel">
-        <div className="grid gap-5 sm:grid-cols-2">
+      <section className="budget-detail-summary surface-panel" data-state={value.progress.state}>
+        <div className="budget-detail-summary__header">
           <div>
-            <p className="eyebrow">Лимит</p>
-            <p className="mt-2 text-2xl font-semibold text-[var(--nm-text)]">
+            <p className="eyebrow">Лимит · {value.currency}</p>
+            <p className="budget-detail-summary__limit">
               {formatMoney(value.limit_minor, value.currency, locale)}
             </p>
           </div>
-          <div>
-            <p className="eyebrow">Потрачено</p>
-            <p className="mt-2 text-2xl font-semibold text-[var(--nm-text)]">
-              {formatMoney(progress.spent_minor, value.currency, locale)}
-            </p>
-          </div>
+          <p className="budget-detail-summary__scope">Без пересчёта между валютами</p>
         </div>
-        <div className="mt-6 h-3 overflow-hidden rounded-full bg-[var(--nm-line)]">
-          <span
-            className={`block h-full rounded-full ${overspent ? "bg-[var(--nm-danger)]" : "bg-[var(--nm-accent)]"}`}
-            style={{ width: `${String(Math.floor(progress.progress_bps / 100))}%` }}
-          />
-        </div>
-        <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-2">
+        <BudgetProgressOverview budget={value} locale={locale} />
+        <dl className="budget-detail-metadata">
           <div>
-            <dt className="text-[var(--nm-muted)]">{overspent ? "Перерасход" : "Осталось"}</dt>
-            <dd className={overspent ? "mt-1 font-medium text-[var(--nm-danger)]" : "mt-1 font-medium text-[var(--nm-text)]"}>
-              {formatMoney(
-                overspent ? progress.overspent_minor : progress.remaining_minor,
-                value.currency,
-                locale,
-              )}
-            </dd>
+            <dt>Охват</dt>
+            <dd>{value.category_id === null ? "Все расходы" : "Одна категория расходов"}</dd>
           </div>
           <div>
-            <dt className="text-[var(--nm-muted)]">Охват</dt>
-            <dd className="mt-1 font-medium text-[var(--nm-text)]">
-              {value.category_id === null ? "Все расходы" : "Одна категория расходов"}
-            </dd>
+            <dt>Валюта</dt>
+            <dd>{value.currency} · отдельно от других валют</dd>
           </div>
           <div>
-            <dt className="text-[var(--nm-muted)]">Валюта</dt>
-            <dd className="mt-1 font-medium text-[var(--nm-text)]">{value.currency}</dd>
-          </div>
-          <div>
-            <dt className="text-[var(--nm-muted)]">Часовой пояс периода</dt>
-            <dd className="mt-1 font-medium text-[var(--nm-text)]">{value.timezone}</dd>
+            <dt>Часовой пояс периода</dt>
+            <dd>{value.timezone}</dd>
           </div>
         </dl>
       </section>
@@ -136,6 +114,11 @@ export function BudgetDetailPage({ budgetId }: { readonly budgetId: string }) {
       />
 
       <div className="flex flex-wrap gap-3">
+        {!deleted ? (
+          <Link className="button button--primary" to={budgetTransactionsPath(value)}>
+            Операции этого бюджета
+          </Link>
+        ) : null}
         <Link className="button button--secondary" to="/budgets">
           К списку
         </Link>

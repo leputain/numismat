@@ -7,6 +7,16 @@ export type AccountsResponse = Schemas["AccountsResponse"];
 export type ActiveDraftResponse = Schemas["ActiveDraftResponse"];
 export type Category = Schemas["CategoryResponse"];
 export type CategoriesResponse = Schemas["CategoriesResponse"];
+export type AccountMutationResponse = Schemas["AccountMutationResponse"];
+export type CategoryMutationResponse = Schemas["CategoryMutationResponse"];
+export type CreateAccountRequest =
+  operations["create_account_api_v1_accounts_post"]["requestBody"]["content"]["application/json"];
+export type CreateCategoryRequest =
+  operations["create_category_api_v1_categories_post"]["requestBody"]["content"]["application/json"];
+export type RenameCatalogRequest =
+  operations["update_account_api_v1_accounts__account_id__patch"]["requestBody"]["content"]["application/json"];
+export type VersionedCatalogRequest =
+  operations["archive_account_api_v1_accounts__account_id__archive_post"]["requestBody"]["content"]["application/json"];
 export type Budget = Schemas["BudgetResponse"];
 export type BudgetMutationResponse = Schemas["BudgetMutationResponse"];
 export type BudgetPageResponse = Schemas["BudgetPageResponse"];
@@ -18,7 +28,14 @@ export type DashboardResponse = Schemas["DashboardResponse"];
 export type Draft = Schemas["DraftResponse"];
 export type DraftAction =
   operations["patch_draft_api_v1_drafts__draft_id__patch"]["requestBody"]["content"]["application/json"];
+export type ComposeDraftRequest =
+  operations["compose_draft_api_v1_drafts_compose_post"]["requestBody"]["content"]["application/json"];
+export type QuickDraftRequest =
+  operations["begin_quick_draft_api_v1_drafts_quick_post"]["requestBody"]["content"]["application/json"];
 export type MutationResponse = Schemas["MutationResponse"];
+export type NotificationPreferencesResponse = Schemas["NotificationPreferencesResponse"];
+export type NotificationPreferencesRequest =
+  operations["replace_notification_preferences_api_v1_settings_notifications_put"]["requestBody"]["content"]["application/json"];
 export type PeriodReportResponse = Schemas["PeriodReportResponse"];
 export type TimeSeriesResponse = Schemas["TimeSeriesResponse"];
 export type TimeSeriesBucket = Schemas["TimeSeriesBucketResponse"];

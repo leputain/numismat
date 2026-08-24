@@ -7,7 +7,8 @@ COMPOSE ?= docker compose
 OPS_PROJECT ?= finbot-ops
 OPS_COMPOSE = $(COMPOSE) -p $(OPS_PROJECT) -f compose.ops.yaml
 
-.PHONY: setup dev-up dev-down migrate run run-api run-mcp run-recurring-tick format lint typecheck test integration audit \
+.PHONY: setup dev-up dev-down migrate run run-api run-mcp run-recurring-tick \
+	run-notification-scheduler-tick run-notification-delivery-tick format lint typecheck test integration audit \
 	compose-config ops-test check build backup backup-age restic-init restic-check \
 	restore-drill healthcheck openapi frontend-install frontend-api-generate \
 	openapi-check frontend-api-check frontend-typecheck frontend-test frontend-build \
@@ -42,6 +43,12 @@ run-mcp:
 
 run-recurring-tick:
 	PYTHONPATH=src $(UV) run python -m finbot.recurring_runner --once
+
+run-notification-scheduler-tick:
+	PYTHONPATH=src $(UV) run python -m finbot.notification_scheduler --once
+
+run-notification-delivery-tick:
+	PYTHONPATH=src $(UV) run python -m finbot.notification_delivery --once
 
 format:
 	$(UV) run ruff format .

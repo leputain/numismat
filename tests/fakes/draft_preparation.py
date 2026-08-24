@@ -2,9 +2,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
+from finbot.application.draft_preparation import QuickDraftParseResult
 from finbot.application.dto import AccountSnapshot, CategorySnapshot, OwnerSnapshot
 from finbot.domain.category_rules import CategoryRuleSpec
-from finbot.domain.transactions import TransactionDraft, TransactionType
+from finbot.domain.transactions import TransactionType
 
 
 @dataclass(slots=True)
@@ -29,11 +30,11 @@ class StubOwnerReader:
 
 @dataclass(slots=True)
 class StubQuickDraftParser:
-    result: TransactionDraft | None = None
+    result: QuickDraftParseResult | None = None
     error: ValueError | None = None
     calls: list[tuple[str, str]] = field(default_factory=list, repr=False)
 
-    def parse(self, text: str, *, timezone: str) -> TransactionDraft:
+    def parse(self, text: str, *, timezone: str) -> QuickDraftParseResult:
         self.calls.append((text, timezone))
         if self.error is not None:
             raise self.error

@@ -1,4 +1,5 @@
 export function protectedBackDestination(pathname: string): string | null {
+  if (pathname === "/draft/compose") return "/draft";
   if (/^\/transactions\/[^/]+$/.test(pathname)) return "/transactions";
   if (pathname === "/budgets/new") return "/budgets";
   if (/^\/budgets\/[^/]+\/edit$/.test(pathname)) return pathname.replace(/\/edit$/, "");
@@ -11,5 +12,8 @@ export function protectedBackDestination(pathname: string): string | null {
   if (/^\/rates\/[^/]+\/publish$/.test(pathname)) return pathname.replace(/\/publish$/, "");
   if (/^\/rates\/versions\/[^/]+$/.test(pathname)) return "/rates";
   if (/^\/rates\/[^/]+$/.test(pathname)) return "/rates";
+  if (pathname === "/accounts" || pathname === "/categories" || pathname === "/settings") {
+    return "/more";
+  }
   return null;
 }

@@ -30,7 +30,10 @@
 - CSV UTF-8 with BOM с защитой от spreadsheet formulas;
 - приватный Telegram Mini App для каждого разрешённого пользователя с мобильным обзором, аналитикой, историей и
   отдельным review-first draft;
-- бюджеты расходов с явным периодом и прогрессом только в собственной валюте, без скрытого FX;
+- бюджеты расходов с остатком/перерасходом, безопасным дневным расходом и прогнозом только в собственной валюте,
+  без скрытого FX;
+- выключенные по умолчанию Telegram-уведомления о 80/100% бюджета, готовом recurring draft и недельном дайджесте
+  с quiet hours и отдельными privacy-safe scheduler/delivery процессами;
 - регулярные daily/weekly/monthly расписания, которые создают только review-черновики, а не операции;
 - ручные неизменяемые версии валютных курсов и отчёты, привязанные к явно выбранной версии;
 - staged CSV-импорт банка с детерминированной сверкой и явным review/link/skip для каждой строки;
@@ -43,6 +46,8 @@
 ## Пример ввода
 
 ```text
+500                                   сумма без предварительной кнопки
+1 200,50                              сумма с группировкой и копейками
 1450 ресторан                       расход без лишнего синтаксиса
 +250000 зарплата                    доход
 вчера 3200 бензин @наличные         явный счёт
@@ -50,8 +55,14 @@
 799 кофе @"Карта Мир" #"Кафе"      многословные названия
 ```
 
-Сумма хранится в integer minor units: `1450,50 RUB` превращается в `145050`; `float` не используется. Без знака и
-с `-` создаётся расход, с `+` — доход. Изображения принимаются как Telegram photo или JPEG/PNG/WebP до 10 MiB,
+Сообщение только с суммой (`500`, `500,50`, `500.50`, `1 200`) сразу открывает review-first сценарий: тип →
+категория → счёт → дата → комментарий → проверка. Сумма повторно не запрашивается; пока счёт не выбран, она
+показывается без символа валюты. Неоднозначный формат `1.500`, exponent, валюта или слово в amount-only вводе
+отклоняются. Одиночные `+500`/`-500` нужно отправлять без знака, а прежний полный синтаксис `+500 зарплата` и
+`-500 кафе` остаётся совместимым.
+
+Сумма хранится в integer minor units: `1450,50 RUB` превращается в `145050`; `float` не используется. В полном
+текстовом формате без знака и с `-` создаётся расход, с `+` — доход. Изображения принимаются как Telegram photo или JPEG/PNG/WebP до 10 MiB,
 20 мегапикселей и 5000 px по стороне. Исходное изображение и сырой OCR-текст остаются только в памяти процесса.
 
 ## Опциональный локальный AI
@@ -112,10 +123,11 @@ DATABASE_URL=postgresql+psycopg://finbot:finbot-dev-only@db:5432/finbot
 MINIAPP_PUBLIC_URL=https://numismat.localhost
 HTTP_SECURITY_KEY=replace-with-canonical-32-byte-base64url
 BANK_IMPORT_SECURITY_KEY=replace-with-a-different-canonical-32-byte-base64url
+NOTIFICATION_SECURITY_KEY=replace-with-a-third-canonical-32-byte-base64url
 ```
 
-Сгенерируйте два независимых key: HTTP session/idempotency и bank-import fingerprint. Они не должны
-совпадать друг с другом или с bot token:
+Сгенерируйте три независимых key: HTTP session/idempotency, bank-import fingerprint и notification
+dedupe. Они не должны совпадать друг с другом или с bot token:
 
 ```bash
 python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b'=').decode())"
@@ -154,7 +166,9 @@ Failed auth, любой protected error и успешный logout никогд�
 Auth-attempt epochs не дают запоздалому async response восстановить устаревший subject/state.
 
 HTTP read API уже включает month-to-date dashboard, bounded period/comparison reports, owner-local day/week/month
-timeseries, owner-scoped transaction detail и active keyset pagination. Все суммы передаются decimal strings,
+timeseries, owner-scoped transaction detail и active keyset pagination. Pagination поддерживает период,
+тип, счёт, категорию и валюту; cursor MAC связан с fingerprint текущих фильтров. Все суммы
+передаются decimal strings,
 коллекции имеют жёсткие пределы, а auth и
 составной read выполняются в одной `READ ONLY REPEATABLE READ` транзакции. Подписанный cursor нельзя подделать, но
 он не зашифрован; после изменения операции клиент должен начать live-pagination заново. Draft/transaction mutations
@@ -170,6 +184,11 @@ endpoint нет — новая и повторяемая операция поя
 generated OpenAPI contract, cookie/CSRF shell, общие draft/revision контракты и same-origin production edge. Мобильный
 интерфейс разделяет обзор, операции, аналитику и редкие инструменты; суммы, доли и график считаются отдельно по каждой
 валюте без неявного FX.
+
+Amount-only Telegram input и `/api/v1/drafts/quick` используют тот же review-first draft: одна сумма
+запускает выбор типа, категории, счёта, даты и комментария без повторного ввода amount.
+`/api/v1/drafts/compose` даёт одноэкранную форму, но тоже не пишет transaction до explicit confirm. Mini App
+показывает быстрый capture, три последние операции, review-first Repeat, счета/категории и owner timezone.
 
 Alembic `0009` добавляет owner-scoped recurring schedules и уникальные due instances. Отдельный DB-only
 `recurring-runner` за один bounded tick материализует максимум 32 due-точки и ставит не более одного review-draft
@@ -240,6 +259,8 @@ Telegram Bot API не является end-to-end encrypted Secret Chat. Не о
 make setup          frozen dependency sync
 make run-api        локальный FastAPI entry point
 make run-recurring-tick  один bounded tick recurring runner
+make run-notification-scheduler-tick  один bounded tick notification producer
+make run-notification-delivery-tick  одна bounded пачка Telegram delivery
 make run-mcp        локальный read-only MCP stdio server
 make openapi        deterministic offline OpenAPI export
 make lint           Ruff lint
@@ -316,9 +337,10 @@ HTTP session, но его данные сохранятся. DB-only `recurring-
 dot. Тот же origin используется bot, API и edge; configurable API base URL намеренно отсутствует. Разместите
 сертификат и ключ так, чтобы Compose `file:` bind mounts сохранили реальные host permissions:
 
-Production дополнительно требует `secrets/bank_import_security_key`. Храните его вместе с deployment
-secrets и backup metadata: замена ключа начинает новую deduplication epoch, а исторические digests нельзя
-пересчитать без исходных банковских реквизитов.
+Production дополнительно требует `secrets/bank_import_security_key` и
+`secrets/notification_security_key`. Оба ключа должны быть независимы от HTTP key и друг от друга.
+Храните их вместе с deployment secrets и backup metadata: замена любого keyed-digest key начинает
+новую deduplication epoch, а исторические digests нельзя пересчитать без исходного material.
 
 ```bash
 sudo install -d -m 0700 secrets

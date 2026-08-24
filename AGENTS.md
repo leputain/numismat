@@ -36,6 +36,8 @@ src/finbot/
 ├── bootstrap.py            # Composition root, dependency wiring, and router registration
 ├── config.py               # Validated environment/Docker secret settings
 ├── recurring_runner.py     # Focused DB-only recurring materialize/stage process
+├── notification_scheduler.py # Bounded DB-only privacy-safe notification producer
+├── notification_delivery.py  # Leased allowlist-rechecked Telegram delivery process
 └── healthcheck.py          # Bounded migration/database health probe
 migrations/                 # Alembic revisions
 tests/unit/                 # Isolated domain/application/adapter tests
@@ -57,6 +59,8 @@ web/                        # React/Vite Mini App and generated OpenAPI types
 | `src/finbot/adapters/http/app.py` | Composes FastAPI, `/api/v1`, structured errors, OpenAPI, and injected readiness. |
 | `src/finbot/adapters/mcp/__main__.py` | Starts the optional local read-only MCP stdio server with a dedicated DB role. |
 | `src/finbot/recurring_runner.py` | Runs bounded two-phase recurring ticks without Telegram/API secrets. |
+| `src/finbot/notification_scheduler.py` | Produces deduplicated notification jobs without Telegram access or financial queue payloads. |
+| `src/finbot/notification_delivery.py` | Rechecks tenant authorization and delivers leased generic Telegram notifications. |
 | `src/finbot/config.py` | Loads secrets/environment values with bounded validation and hidden sensitive fields. |
 | `src/finbot/healthcheck.py` | Verifies database reachability and the expected Alembic head without leaking connection details. |
 | `migrations/env.py` | Alembic runtime entry point. |
@@ -111,7 +115,8 @@ web/                        # React/Vite Mini App and generated OpenAPI types
 - Bank imports are staged, owner/account-scoped, and review-first. Keep raw CSV and bank references in memory only, persist only normalized fields plus independent keyed 32-byte digests, preserve import provenance atomically, and never auto-link or auto-post a transaction.
 - Dependency security gates audit the hashed runtime graph exported from frozen `uv.lock`, not whichever packages happen to be installed in the developer environment.
 - Frontend API types are generated only from the canonical offline FastAPI OpenAPI document. Never hand-maintain parallel finance/draft DTOs; `web` checks must fail on contract drift, and production builds must not emit source maps or telemetry payloads.
-- Recurring schedules are review-first draft generators. Keep owner timezone immutable, due uniqueness and transaction provenance in PostgreSQL; runner phases use transaction advisory locks, bounded owner/schedule batches, fair at-most-one due schedule per owner per materialization tick, and owner-first locking. An active draft leaves the instance pending with backoff—never auto-post, suspend, replace, or stage a hidden intent. The DB-only runner does not read the Telegram allowlist, so revocation must pause that tenant's schedules or stop the runner.
+- Recurring schedules are review-first draft generators. The owner timezone is optimistic-versioned and mutable; each new schedule captures the owner's current timezone as an immutable snapshot, while existing schedules and budgets keep their stored timezone after later settings changes. Preserve due uniqueness and transaction provenance in PostgreSQL; runner phases use transaction advisory locks, bounded owner/schedule batches, fair at-most-one due schedule per owner per materialization tick, and owner-first locking. An active draft leaves the instance pending with backoff—never auto-post, suspend, replace, or stage a hidden intent. The DB-only runner does not read the Telegram allowlist, so revocation must pause that tenant's schedules or stop the runner.
+- Notifications are owner-opt-in and split into a DB-only scheduler and Telegram delivery process. Persist only owner UUID, closed kind, optional opaque owner-owned reference UUID, keyed 32-byte dedupe digest, bounded lease/retry state, safe failure code, and timestamps—never amounts, currencies, names, descriptions, Telegram text, raw dedupe material, or Telegram IDs. Scheduler pages owners fairly and receives only DB plus its independent digest key. Delivery receives only DB, bot token, and the full allowlist; immediately before Telegram I/O it must recheck current allowlist, immutable private chat, current opt-in, quiet hours, reference ownership, and the authoritative current budget threshold for budget alerts. Keep messages static and generic, retries at most five, and logs fixed/privacy-safe. Cleanup uses a separate advisory singleton, removes at most 500 terminal rows per tick after a fixed 400-day retention, and never touches pending or leased jobs.
 - Production Mini App serving has one canonical HTTPS host and same-origin `/api`; keep API off the public network, keep the edge non-root/read-only/cap-drop, never log URI/query/client identity, and do not rely on ignored Compose `uid/gid/mode` for file-backed TLS secrets. Keep the global Main Mini App disabled and install per-user menu buttons only after committed onboarding.
 - Every feature needs unit tests; PostgreSQL integration tests must use a database name ending in `_test`.
 - Logs are allowlisted JSON and must not contain tokens, credentials, Telegram IDs, amounts, currencies, account/category names, descriptions, message text, OCR text, SQL, or database URLs.

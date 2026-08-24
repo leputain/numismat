@@ -1,9 +1,17 @@
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from finbot.application.draft_composition import (
+    BeginComposeDraftCommand,
+    ComposedDraftInput,
+    PrepareComposedDraftCommand,
+)
 from finbot.application.draft_conflicts import (
     PENDING_DRAFT_INTENT_KEY,
+    PendingComposeIntent,
     PendingQuickIntent,
     PendingRepeatIntent,
     PendingWizardIntent,
@@ -16,6 +24,7 @@ from finbot.application.draft_ingress import (
     BeginRepeatDraftCommand,
     BeginWizardDraftCommand,
     DraftIngressClock,
+    DraftIngressComposePreparer,
     DraftIngressOperation,
     DraftIngressOwnerQuery,
     DraftIngressQuickPreparer,
@@ -42,12 +51,20 @@ from finbot.application.errors import (
 )
 from finbot.application.use_cases.draft_preparation import SystemDraftPreparationClock
 from finbot.application.use_cases.drafts import DraftUseCases
+from finbot.domain.recurrence import resolve_local_occurrence
 
 
 class DraftIngressUseCases:
     """Start a draft or stage one typed replacement intent without overwriting work."""
 
-    __slots__ = ("_clock", "_drafts", "_owners", "_quick_drafts", "_transactions")
+    __slots__ = (
+        "_clock",
+        "_compose_drafts",
+        "_drafts",
+        "_owners",
+        "_quick_drafts",
+        "_transactions",
+    )
 
     def __init__(
         self,
@@ -57,12 +74,14 @@ class DraftIngressUseCases:
         clock: DraftIngressClock | None = None,
         *,
         quick_drafts: DraftIngressQuickPreparer | None = None,
+        compose_drafts: DraftIngressComposePreparer | None = None,
     ) -> None:
         self._drafts = drafts
         self._transactions = transactions
         self._owners = owners
         self._clock = clock or SystemDraftPreparationClock()
         self._quick_drafts = quick_drafts
+        self._compose_drafts = compose_drafts
 
     @staticmethod
     def _pending_payload(
@@ -198,6 +217,82 @@ class DraftIngressUseCases:
             owner,
             draft,
         )
+
+    def _compose_values(
+        self,
+        command: BeginComposeDraftCommand,
+        owner: OwnerSnapshot,
+    ) -> ComposedDraftInput:
+        try:
+            timezone = ZoneInfo(owner.timezone)
+            local_now = self._clock.now(owner.timezone)
+        except ZoneInfoNotFoundError:
+            raise ApplicationValidationError("Часовой пояс владельца не поддерживается") from None
+        if not isinstance(local_now, datetime) or local_now.utcoffset() is None:
+            raise ApplicationValidationError("Текущее время должно содержать часовой пояс")
+        local_now = local_now.astimezone(timezone)
+        occurred_at = local_now
+        if command.spec.occurred_on is not None:
+            day = command.spec.occurred_on
+            nominal = datetime(
+                day.year,
+                day.month,
+                day.day,
+                local_now.hour,
+                local_now.minute,
+                local_now.second,
+                local_now.microsecond,
+            )
+            try:
+                resolved, _adjusted = resolve_local_occurrence(nominal, owner.timezone)
+            except ValueError:
+                raise ApplicationValidationError("Дата операции недоступна") from None
+            occurred_at = resolved.astimezone(timezone)
+        return ComposedDraftInput(
+            kind=command.spec.kind,
+            amount_minor=command.spec.amount_minor,
+            occurred_at=occurred_at,
+            account=command.spec.account,
+            category=command.spec.category,
+            description=command.spec.description,
+        )
+
+    async def begin_compose(self, command: BeginComposeDraftCommand) -> DraftIngressResult:
+        owner = await self._owners(command.owner_id)
+        self._require_owner(owner.owner_id, command.owner_id)
+        current = await self._drafts.get_active(command.owner_id)
+        self._ensure_can_stage(current, owner)
+        values = self._compose_values(command, owner)
+        pending_intent = encode_pending_draft_intent(PendingComposeIntent(values))
+        state: str
+
+        if current is None:
+            if self._compose_drafts is None:
+                raise RuntimeError("Compose draft ingress is not configured")
+            prepared = await self._compose_drafts.execute(
+                PrepareComposedDraftCommand(command.owner_id, values)
+            )
+            if (
+                not isinstance(prepared, PreparedDraftResult)
+                or prepared.state.value != "review"
+                or prepared.payload.get("flow") != "quick"
+            ):
+                raise ApplicationValidationError("Составной черновик повреждён")
+            state = prepared.state.value
+            payload = prepared.payload
+        else:
+            state = current.state
+            payload = current.payload
+
+        status, draft = await self._start_or_stage(
+            owner_id=command.owner_id,
+            owner=owner,
+            current=current,
+            state=state,
+            payload=payload,
+            pending_intent=pending_intent,
+        )
+        return DraftIngressResult(DraftIngressOperation.COMPOSE, status, owner, draft)
 
     async def begin_repeat(self, command: BeginRepeatDraftCommand) -> DraftIngressResult:
         owner = await self._owners(command.owner_id)

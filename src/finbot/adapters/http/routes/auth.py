@@ -175,6 +175,7 @@ def _session_response(authenticated: Any) -> AuthSessionResponse:
         locale=authenticated.owner.locale,
         timezone=authenticated.owner.timezone,
         base_currency=authenticated.owner.base_currency,
+        settings_version=authenticated.owner.settings_version,
         expires_at=authenticated.expires_at,
     )
 
